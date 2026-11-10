@@ -20,7 +20,7 @@ function rendre() {
       '<p class="meta">Communes, arrondissements ou départements, partout en France.</p>' +
       '<div class="panel"><input id="o-lieu" class="txt" type="search" placeholder="Nom ou code postal" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"><div class="sugg" id="o-sugg"></div>' +
       '<div class="tags" id="o-lieux">' + C.lieux.map((l, i) => '<span class="tag">' + esc(l.nom) + '<button class="x" type="button" data-o-lx="' + i + '" aria-label="Retirer ' + esc(l.nom) + '">✕</button></span>').join('') + '</div></div>' +
-      '<div class="row"><div class="grow"><p class="meta">Un profil de critères déjà prêt ?</p></div><button class="btn quiet" type="button" data-o-import="1">Importer un fichier</button></div>' +
+      '<div class="row"><div class="grow"><p class="meta">Un profil de critères déjà prêt ?</p></div><span style="display:inline-flex;flex-direction:column;gap:6px;flex:none"><button class="btn quiet" type="button" id="o-coller">Coller un lien reçu</button><button class="btn quiet" type="button" data-o-import="1">Importer un fichier</button></span></div>' +
       '<div class="nav"><span></span><button class="btn primary" type="button" data-o-next="1"' + (C.lieux.length ? '' : ' disabled') + '>Suivant</button></div>';
   } else if (etape === 2) {
     const ty = C.types.length === 2 ? 'both' : C.types[0];

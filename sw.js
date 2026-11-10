@@ -3,12 +3,12 @@
    Mise à jour : changer VERSION (égale à APP_VERSION de js/config.js). La nouvelle coquille est
    téléchargée en entier, puis prend la main ; la page déjà ouverte garde ses fichiers, la nouvelle
    version sert au rechargement suivant. */
-const VERSION = '1.0.4';
+const VERSION = '1.1.0';
 const CACHE = 'suivi-appart-' + VERSION;
 const COQUILLE = [
   './', 'index.html', 'app.css', 'manifest.webmanifest',
   'js/app.js', 'js/config.js', 'js/etat.js', 'js/net.js', 'js/recherche.js', 'js/store.js', 'js/enrichissement.js',
-  'js/core/bienici.js', 'js/core/criteres.js', 'js/core/fusion.js', 'js/core/score.js', 'js/core/transports.js', 'js/core/util.js',
+  'js/core/bienici.js', 'js/core/criteres.js', 'js/core/partage.js', 'js/core/fusion.js', 'js/core/score.js', 'js/core/transports.js', 'js/core/util.js',
   'js/ui/accueil.js', 'js/ui/adresse.js', 'js/ui/cartes.js', 'js/ui/criteres-ui.js', 'js/ui/divers.js', 'js/ui/donnees.js',
   'fonts/bricolage-grotesque-latin.woff2', 'fonts/bricolage-grotesque-latin-ext.woff2',
   'fonts/instrument-sans-latin.woff2', 'fonts/instrument-sans-latin-ext.woff2',

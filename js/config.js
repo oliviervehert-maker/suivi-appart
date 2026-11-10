@@ -1,7 +1,7 @@
 /* Nom de l'application : une seule constante (avec manifest.webmanifest et <title>). */
 export const APP_NOM = 'Suivi appart';
 /* Doit rester égal à VERSION dans sw.js. */
-export const APP_VERSION = '1.0.4';
+export const APP_VERSION = '1.1.0';
 
 /* Seuls hôtes contactés par l'application (en plus d'elle-même). */
 export const HOTES_AUTORISES = [

@@ -10,7 +10,8 @@ import { chargerCaches, planifier, progres } from './enrichissement.js';
 import { rendreListe, rendreEntete, majCarte, carteHTML, evalBien, afficherPlus, toutEvaluer } from './ui/cartes.js';
 import { rendreCriteres, majResumes, rendreLignes, rendreQuartiers, clic as clicCrit, change as changeCrit, touche as toucheCrit } from './ui/criteres-ui.js';
 import { rendreSuivi, rendreSources, ouvrirMail, copierMail, ouvrirPhotos, ouvrirManuel, exporterTableur, cocherDossier } from './ui/divers.js';
-import { exporterDonnees, importerFichier, toutEffacer } from './ui/donnees.js';
+import { exporterDonnees, importerFichier, toutEffacer, donneesAPartager } from './ui/donnees.js';
+import { encoderLien, decoderLien, codeDansTexte } from './core/partage.js';
 import { ouvrirAccueil, clicAccueil } from './ui/accueil.js';
 
 const $ = (id) => document.getElementById(id);
@@ -188,6 +189,8 @@ document.addEventListener('click', async (ev) => {
   if (t.id === 'export-xlsx') { exporterTableur(); return; }
   if (t.id === 'data-export') { const r = exporterDonnees(); $('data-msg').textContent = 'Fichier ' + r.nom + ' prêt (' + r.nb + ' bien' + (r.nb > 1 ? 's' : '') + ' suivi' + (r.nb > 1 ? 's' : '') + ').'; return; }
   if (t.id === 'data-import') { $('file-import').click(); return; }
+  if (t.id === 'data-partager') { partagerReglages(); return; }
+  if (t.id === 'data-coller' || t.id === 'o-coller') { collerLien(); return; }
   if (t.id === 'data-clear') {
     if (!window.confirm('Tout effacer sur cet appareil : critères, annonces, notes, calculs ? Action définitive.')) return;
     await toutEffacer();
@@ -218,16 +221,7 @@ document.addEventListener('change', async (ev) => {
   if (t.id === 'file-import') {
     const f = t.files && t.files[0]; t.value = '';
     if (!f) return;
-    const msg = $('data-msg');
-    try {
-      const r = await importerFichier(await f.text());
-      if (r == null) return;
-      msg.textContent = r;
-      $('onb').hidden = true;
-      rendreCriteres(); toutRendre({ reinitialiser: true });
-      if (S.C.lieux.length && signature() !== signatureFaite) actualiser(); else planifierEnr();
-      if (ongletCourant !== 'sources') window.alert(r);
-    } catch (e) { msg.textContent = e.message || 'Import impossible.'; window.alert(e.message || 'Import impossible.'); }
+    await importerTexte(await f.text());
     return;
   }
   changeCrit(t);
@@ -245,14 +239,67 @@ document.addEventListener('visibilitychange', () => {
   if (S.C.lieux.length && S.run.derniere && (Date.now() - Date.parse(S.run.derniere)) / 60000 > RECHERCHE_AUTO_MIN && navigator.onLine !== false) actualiser();
 });
 
+/* ---------- import (fichier ou lien) et partage par lien ---------- */
+let importVu = false;
+async function importerTexte(texte) {
+  importVu = true;
+  const msg = $('data-msg');
+  try {
+    const r = await importerFichier(texte);
+    if (r == null) return false;
+    msg.textContent = r;
+    $('onb').hidden = true;
+    rendreCriteres(); toutRendre({ reinitialiser: true });
+    if (S.C.lieux.length && signature() !== signatureFaite) actualiser(); else planifierEnr();
+    if (ongletCourant !== 'sources') window.alert(r);
+    return true;
+  } catch (e) { msg.textContent = e.message || 'Import impossible.'; window.alert(e.message || 'Import impossible.'); return false; }
+}
+async function importerCode(code) {
+  let texte;
+  try { texte = await decoderLien(code); } catch (e) { window.alert(e.message || 'Lien non reconnu.'); return false; }
+  return importerTexte(texte);
+}
+/* Lien de réglages ouvert dans le navigateur : le fragment est retiré de l'adresse avant tout. */
+async function importerDepuisAdresse() {
+  const code = codeDansTexte(location.hash);
+  if (!code) return false;
+  try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* adresse laissée telle quelle */ }
+  return importerCode(code);
+}
+window.addEventListener('hashchange', () => { importerDepuisAdresse(); });
+function collerLien() {
+  const t = window.prompt('Coller ici le lien de réglages reçu');
+  if (!t) return;
+  const c = codeDansTexte(t);
+  if (!c) { window.alert('Lien non reconnu.'); return; }
+  importerCode(c);
+}
+async function partagerReglages() {
+  const msg = $('data-msg');
+  try {
+    const url = location.origin + location.pathname + '#r=' + await encoderLien(donneesAPartager());
+    if (navigator.share) {
+      try { await navigator.share({ title: APP_NOM, url }); msg.textContent = 'Lien partagé.'; return; }
+      catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    await navigator.clipboard.writeText(url);
+    msg.textContent = 'Lien copié.';
+  } catch (e) { msg.textContent = 'Partage impossible sur cet appareil : passer par « Exporter ».'; }
+}
+
 /* ---------- service worker (coquille hors ligne) ---------- */
 function enregistrerSW() {
   if (!('serviceWorker' in navigator)) return;
   if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return;
   const avait = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => {});
+  const debut = Date.now();
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (avait) $('version').textContent = APP_NOM + ' : nouvelle version installée, active au prochain lancement.';
+    if (!avait) return;
+    /* Nouvelle version arrivée juste après l'ouverture, sans saisie ni import en cours : elle est prise tout de suite. */
+    if (Date.now() - debut < 20000 && !importVu && !document.querySelector('input:focus, textarea:focus, select:focus')) { location.reload(); return; }
+    $('version').textContent = APP_NOM + ' : nouvelle version installée, active au prochain lancement.';
   });
 }
 
@@ -273,6 +320,7 @@ async function demarrer() {
   $('version').textContent = APP_NOM + ' ' + APP_VERSION;
   enregistrerSW();
   setInterval(majRun, 30000);
+  if (await importerDepuisAdresse()) return;
   if (!S.reglages.accueilFait && !S.C.lieux.length && !S.biens.length) {
     ouvrirAccueil(() => { rendreCriteres(); toutRendre({ reinitialiser: true }); actualiser(); });
     return;

@@ -10,9 +10,16 @@ import { geocoder } from './adresse.js';
 import { telecharger, dateFichier } from './divers.js';
 import { viderMemoire } from '../enrichissement.js';
 
+function sauvegarde(alleger) {
+  let biens = S.biens.filter((b) => aDesDonneesUtilisateur(b) || b.src === 'manuel');
+  if (alleger) biens = biens.map((b) => Object.assign({}, b, { description: '', photos: (b.photos || []).slice(0, 3) }));
+  return { type: 'suivi-appart-sauvegarde', version: 1, app: APP_VERSION, exporteLe: new Date().toISOString(), criteres: S.C, reglages: { dossier: S.reglages.dossier || [] }, biens };
+}
+/* Contenu d'un lien de partage : la sauvegarde, sans les descriptions et avec trois photos par bien. */
+export function donneesAPartager() { return sauvegarde(true); }
+
 export function exporterDonnees() {
-  const biens = S.biens.filter((b) => aDesDonneesUtilisateur(b) || b.src === 'manuel');
-  const o = { type: 'suivi-appart-sauvegarde', version: 1, app: APP_VERSION, exporteLe: new Date().toISOString(), criteres: S.C, reglages: { dossier: S.reglages.dossier || [] }, biens };
+  const o = sauvegarde(false), biens = o.biens;
   const nom = 'suivi-appart-sauvegarde-' + dateFichier() + '.json';
   telecharger(nom, new Blob([JSON.stringify(o, null, 1)], { type: 'application/json' }));
   return { nom, nb: biens.length };

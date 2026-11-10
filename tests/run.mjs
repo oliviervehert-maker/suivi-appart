@@ -46,6 +46,16 @@ t('marche 10 m = 1 min minimum', minutesAPied(10) === 1);
 t('heure de Paris en hiver (+01:00)', isoParis(new Date(2026, 10, 17, 12), '08:30') === '2026-11-17T08:30:00+01:00', isoParis(new Date(2026, 10, 17, 12), '08:30'));
 t('heure de Paris en été (+02:00)', isoParis(new Date(2027, 5, 15, 12), '09:30').endsWith('+02:00'));
 t('vrai signe moins', fmt(-12) === '−12', fmt(-12));
+{
+  const { encoderLien, decoderLien, codeDansTexte } = await import('../js/core/partage.js');
+  const objet = { type: 'suivi-appart-profil', criteres: { lieux: [{ nom: 'Asnières-sur-Seine' }], note: 'é€ — ' + 'x'.repeat(3000) } };
+  const code = await encoderLien(objet);
+  t('lien de partage : aller-retour exact', await decoderLien(code) === JSON.stringify(objet));
+  t('lien de partage : compressé et sans caractère à échapper', code.startsWith('1.') && code.length < 600 && /^[01]\.[A-Za-z0-9_-]+$/.test(code), code.length);
+  t('lien de partage : code retrouvé dans une adresse complète', codeDansTexte('https://exemple.test/app/#r=' + code) === code && codeDansTexte(code) === code && codeDansTexte('https://exemple.test/') === null);
+  let refus = false; try { await decoderLien('1.AAAA'); } catch (e) { refus = true; }
+  t('lien de partage : code abîmé refusé', refus);
+}
 t('distance Asnières-Paris ≈ 5,5 km', Math.abs(distM(48.9147, 2.2815, 48.8735, 2.3093) - 5050) < 600, Math.round(distM(48.9147, 2.2815, 48.8735, 2.3093)));
 t('HTML retiré des descriptions', stripHtml('a<br>b &amp; c') === 'a\nb & c');
 
