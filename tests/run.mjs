@@ -224,7 +224,7 @@ function fichiers(dir, ext) {
   const out = [];
   for (const f of readdirSync(dir)) {
     const p = join(dir, f);
-    if (statSync(p).isDirectory()) { if (f !== 'vendor' && f !== 'tests') out.push(...fichiers(p, ext)); }
+    if (statSync(p).isDirectory()) { if (f !== 'vendor' && f !== 'tests' && f !== 'serveur' && f !== '.git') out.push(...fichiers(p, ext)); }
     else if (ext.some((e) => f.endsWith(e))) out.push(p);
   }
   return out;
@@ -244,7 +244,9 @@ for (const f of JS) {
   }
 }
 t('chaque nom importé est exporté', importsKo.length === 0, importsKo);
-const autorises = ['www.bienici.com', 'res.bienici.com', 'file.bienici.com', 'api.transitous.org', 'api-adresse.data.gouv.fr', 'data.iledefrance-mobilites.fr'];
+const { ALERTES_URL } = await import('../js/config.js');
+/* Le serveur d'alertes (serveur/, programme distinct, jamais chargé par l'appli) a ses propres tests plus bas. */
+const autorises = ['www.bienici.com', 'res.bienici.com', 'file.bienici.com', 'api.transitous.org', 'api-adresse.data.gouv.fr', 'data.iledefrance-mobilites.fr'].concat(ALERTES_URL ? [new URL(ALERTES_URL).hostname] : []);
 /* Liens d'attribution exigés par le règlement de Transitous : simples liens cliquables, jamais appelés par l'appli. */
 /* github.com : lien de contact du projet (CONTACT_APP), cliquable, jamais appelé. */
 const liensAttribution = ['transitous.org', 'www.openstreetmap.org', 'github.com'];
@@ -264,6 +266,486 @@ t('tous les modules JS dans la coquille', jsRel.every((f) => coquille.indexOf(f)
 let bt = [];
 for (const f of JS) readFileSync(f, 'utf8').split('\n').forEach((l, i) => { if (/^\s*(export\s+)?function\b.*\{.*\/\/.*\}\s*$/.test(l)) bt.push(f + ':' + (i + 1)); });
 t('aucun « // » dans une fonction écrite sur une ligne', bt.length === 0, bt);
+
+/* ---------------- Alertes par notification (hors ligne) ---------------- */
+const PUSH = await import('../serveur/src/push.js');
+const SA = await import('../serveur/src/alertes.js');
+const CA = await import('../js/core/alertes.js');
+const ST = globalThis.crypto.subtle;
+const TE = new TextEncoder(), TD = new TextDecoder();
+
+/* Déchiffrement côté « navigateur », écrit indépendamment de push.js : en-tête lu selon la RFC 8188,
+   dérivations par la primitive HKDF native de WebCrypto (push.js, lui, enchaîne des HMAC à la main). */
+async function dechiffrerNavigateur(corps, uaPriveeJwk, uaPublique, authSecret) {
+  const sel = corps.slice(0, 16);
+  const rs = new DataView(corps.buffer, corps.byteOffset + 16, 4).getUint32(0);
+  const idlen = corps[20];
+  const asPublique = corps.slice(21, 21 + idlen);
+  const chiffre = corps.slice(21 + idlen);
+  if (chiffre.length > rs) throw new Error('plus d’un enregistrement');
+  const priv = await ST.importKey('jwk', uaPriveeJwk, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+  const pub = await ST.importKey('raw', asPublique, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  const secret = new Uint8Array(await ST.deriveBits({ name: 'ECDH', public: pub }, priv, 256));
+  const hkdf = async (salt, ikm, info, n) => new Uint8Array(await ST.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info }, await ST.importKey('raw', ikm, 'HKDF', false, ['deriveBits']), n * 8));
+  const info = new Uint8Array([...TE.encode('WebPush: info'), 0, ...uaPublique, ...asPublique]);
+  const ikm = await hkdf(authSecret, secret, info, 32);
+  const cek = await hkdf(sel, ikm, new Uint8Array([...TE.encode('Content-Encoding: aes128gcm'), 0]), 16);
+  const nonce = await hkdf(sel, ikm, new Uint8Array([...TE.encode('Content-Encoding: nonce'), 0]), 12);
+  const clair = new Uint8Array(await ST.decrypt({ name: 'AES-GCM', iv: nonce }, await ST.importKey('raw', cek, 'AES-GCM', false, ['decrypt']), chiffre));
+  let i = clair.length - 1;
+  while (i >= 0 && clair[i] === 0) i--;
+  if (clair[i] !== 2) throw new Error('délimiteur de dernier enregistrement absent');
+  return clair.slice(0, i);
+}
+async function essai(f) { try { return await f(); } catch (e) { return null; } }
+async function paireNavigateur() {
+  const p = await ST.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const pub = new Uint8Array(await ST.exportKey('raw', p.publicKey));
+  const auth = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  return { jwk: await ST.exportKey('jwk', p.privateKey), pub, auth, p256dh: PUSH.b64uEnc(pub), authB64: PUSH.b64uEnc(auth) };
+}
+
+groupe('Alertes : Web Push (RFC 8291, RFC 8292)');
+{
+  /* RFC 8291, annexe A. */
+  const V = {
+    clair: 'V2hlbiBJIGdyb3cgdXAsIEkgd2FudCB0byBiZSBhIHdhdGVybWVsb24',
+    asPub: 'BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8',
+    asPriv: 'yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw',
+    uaPub: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4',
+    uaPriv: 'q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94',
+    sel: 'DGv6ra1nlYgDCS1FRnbzlw', auth: 'BTBZMqHH6r4Tts7J_aSIgg',
+    ecdh: 'kyrL1jIIOHEzg3sM2ZWRHDRB62YACZhhSlknJ672kSs', prkCle: 'Snr3JMxaHVDXHWJn5wdC52WjpCtd2EIEGBykDcZW32k',
+    ikm: 'S4lYMb_L0FxCeq0WhDx813KgSYqU26kOyzWUdsXYyrg', prk: '09_eUZGrsvxChDCGRCdkLiDXrReGOEVeSCdCcPBSJSc',
+    cek: 'oIhVW04MRdy2XN9CiKLxTg', nonce: '4h_95klXJ5E_qnoN',
+    corps: 'DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN'
+  };
+  const d = PUSH.b64uDec;
+  t('RFC 8291 : texte clair du vecteur', TD.decode(d(V.clair)) === 'When I grow up, I want to be a watermelon');
+  const r = await PUSH.chiffrer({ p256dh: V.uaPub, auth: V.auth, message: d(V.clair), sel: d(V.sel), ephemere: { publique: d(V.asPub), privee: d(V.asPriv) } });
+  for (const k of ['ecdh', 'prkCle', 'ikm', 'prk', 'cek', 'nonce']) t('RFC 8291 : valeur intermédiaire ' + k + ' identique', PUSH.b64uEnc(r.trace[k]) === V[k], PUSH.b64uEnc(r.trace[k]));
+  t('RFC 8291 : corps chiffré identique à l’octet près (' + r.corps.length + ' octets)', PUSH.b64uEnc(r.corps) === V.corps);
+  const clair = await essai(() => dechiffrerNavigateur(d(V.corps), PUSH.jwkDepuisBrut(d(V.uaPub), d(V.uaPriv)), d(V.uaPub), d(V.auth)));
+  t('RFC 8291 : corps de la RFC déchiffré par le côté navigateur indépendant', !!clair && TD.decode(clair) === 'When I grow up, I want to be a watermelon');
+  const nav = await paireNavigateur();
+  const msg = JSON.stringify({ t: 'Nouvelle annonce · Asnières, Bécon', c: '70 m² · 3 pièces · 1 725 € CC', u: './?b=bi-1', tag: 'sa-bi-1' });
+  const r2 = await PUSH.chiffrer({ p256dh: nav.p256dh, auth: nav.authB64, message: msg });
+  const ar = await essai(() => dechiffrerNavigateur(r2.corps, nav.jwk, nav.pub, nav.auth));
+  t('aller-retour : clés et sel aléatoires, déchiffrement indépendant', !!ar && TD.decode(ar) === msg);
+  const r3 = await PUSH.chiffrer({ p256dh: nav.p256dh, auth: nav.authB64, message: msg });
+  t('aller-retour : deux envois du même message diffèrent (sel et clé éphémère neufs)', PUSH.b64uEnc(r3.corps) !== PUSH.b64uEnc(r2.corps));
+
+  /* VAPID */
+  const pv = await ST.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const pubV = new Uint8Array(await ST.exportKey('raw', pv.publicKey));
+  const jwkV = await ST.exportKey('jwk', pv.privateKey);
+  const T0 = Date.UTC(2026, 10, 18, 10, 0);
+  const jeton = await PUSH.jetonVapid({ aud: 'https://fcm.googleapis.com', sub: 'https://exemple.test/contact', priveeJwk: JSON.stringify(jwkV), maintenant: T0 });
+  const [h, c, s] = jeton.split('.');
+  const entete = JSON.parse(TD.decode(d(h))), claims = JSON.parse(TD.decode(d(c))), sig = d(s);
+  t('VAPID : en-tête ES256 / JWT', entete.alg === 'ES256' && entete.typ === 'JWT');
+  t('VAPID : aud = origine du service, sub présent', claims.aud === 'https://fcm.googleapis.com' && claims.sub === 'https://exemple.test/contact');
+  t('VAPID : expiration ≤ 12 h', claims.exp > T0 / 1000 && claims.exp - T0 / 1000 <= 12 * 3600, claims.exp - T0 / 1000);
+  t('VAPID : signature brute r||s de 64 octets', sig.length === 64, sig.length);
+  const cleV = await ST.importKey('raw', pubV, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+  t('VAPID : signature vérifiée avec la clé publique', await ST.verify({ name: 'ECDSA', hash: 'SHA-256' }, cleV, sig, TE.encode(h + '.' + c)));
+  const sigAlteree = sig.slice(); sigAlteree[5] ^= 1;
+  t('VAPID : signature altérée refusée', !(await ST.verify({ name: 'ECDSA', hash: 'SHA-256' }, cleV, sigAlteree, TE.encode(h + '.' + c))));
+  t('VAPID : en-tête Authorization « vapid t=…, k=… »', PUSH.enteteVapid(jeton, PUSH.b64uEnc(pubV)) === 'vapid t=' + jeton + ', k=' + PUSH.b64uEnc(pubV));
+
+  /* Services de notification acceptés */
+  const oui = ['https://fcm.googleapis.com/fcm/send/abc', 'https://web.push.apple.com/QGx', 'https://updates.push.services.mozilla.com/wpush/v2/x', 'https://db5p.notify.windows.com/w/?token=x'];
+  const non = ['http://fcm.googleapis.com/fcm/send/abc', 'https://fcm.googleapis.com.evil.test/x', 'https://evilpush.apple.com/x', 'https://push.apple.com.evil.test/', 'https://exemple.test/push', 'https://fcm.googleapis.com:8443/x', 'https://u:p@fcm.googleapis.com/x', 'https://127.0.0.1/x', 'pas une adresse'];
+  t('endpoint : services connus acceptés', oui.every(PUSH.endpointAccepte), oui.filter((x) => !PUSH.endpointAccepte(x)));
+  t('endpoint : tout autre hôte, http, port ou identifiants refusés', non.every((x) => !PUSH.endpointAccepte(x)), non.filter(PUSH.endpointAccepte));
+
+  /* Envoi : en-têtes, codes de retour */
+  const vu = [];
+  const ab = { endpoint: 'https://fcm.googleapis.com/fcm/send/1', keys: { p256dh: nav.p256dh, auth: nav.authB64 } };
+  const vapid = { publique: PUSH.b64uEnc(pubV), priveeJwk: JSON.stringify(jwkV), sujet: 'https://exemple.test/contact' };
+  const envoi = (statut) => PUSH.envoyerPush({ abonnement: ab, donnees: { t: 'x', c: 'y', u: './', tag: 'z' }, vapid, maintenant: T0, fetch: async (u, o) => { vu.push(o); if (statut === 'reseau') throw new Error('x'); return new Response(null, { status: statut }); } });
+  const e201 = await envoi(201);
+  const hd = vu[0].headers;
+  t('envoi : POST, TTL 43200, Urgency normal, aes128gcm, Authorization vapid', vu[0].method === 'POST' && hd.TTL === '43200' && hd.Urgency === 'normal' && hd['Content-Encoding'] === 'aes128gcm' && /^vapid t=[^,]+, k=/.test(hd.Authorization) && e201.etat === 'ok');
+  const lu = await essai(() => dechiffrerNavigateur(vu[0].body, nav.jwk, nav.pub, nav.auth));
+  t('envoi : corps déchiffrable par le navigateur', !!lu && JSON.parse(TD.decode(lu)).t === 'x');
+  const etats = [];
+  for (const st of [404, 410, 429, 500, 503, 400, 'reseau']) etats.push((await envoi(st)).etat);
+  t('envoi : 404/410 -> supprimer, 429/5xx/réseau -> réessayer, 400 -> échec', etats.join() === 'supprimer,supprimer,reessayer,reessayer,reessayer,echec,reessayer', etats);
+  const refus = await PUSH.envoyerPush({ abonnement: { endpoint: 'https://exemple.test/x', keys: ab.keys }, donnees: {}, vapid, maintenant: T0, fetch: async () => { vu.push('APPEL'); return new Response(null, { status: 201 }); } });
+  t('envoi : endpoint hors liste refusé sans aucun appel réseau', refus.etat === 'refuse' && vu[vu.length - 1] !== 'APPEL');
+}
+
+/* ---------- monde simulé : KV, Bien'ici, service de notification ---------- */
+function fausseKV() {
+  const m = new Map(), n = { get: 0, put: 0, delete: 0, list: 0 };
+  return {
+    m, n,
+    async get(k) { n.get++; return m.has(k) ? m.get(k) : null; },
+    async put(k, v) { n.put++; m.set(k, String(v)); },
+    async delete(k) { n.delete++; m.delete(k); },
+    async list(o = {}) { n.list++; return { keys: [...m.keys()].filter((k) => k.startsWith(o.prefix || '')).sort().map((name) => ({ name })), list_complete: true }; }
+  };
+}
+const ORIG = 'https://exemple.github.io';
+const pvS = await ST.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+const ENV = { ORIGINES: ORIG + ', https://autre-origine-permise.test', VAPID_PUBLIQUE: PUSH.b64uEnc(new Uint8Array(await ST.exportKey('raw', pvS.publicKey))), VAPID_PRIVEE: JSON.stringify(await ST.exportKey('jwk', pvS.privateKey)), VAPID_SUJET: 'https://exemple.test/contact' };
+function rep(s, corps) { return new Response(corps == null ? null : JSON.stringify(corps), { status: s, headers: { 'Content-Type': 'application/json' } }); }
+function monde(debut) {
+  const W = { T: debut, annonces: new Map(), horsRecherche: new Map(), appels: [], pushs: [], statutPush: 201, kv: fausseKV(), navs: new Map() };
+  W.fetch = async (url, o = {}) => {
+    const u = new URL(url);
+    W.appels.push(u.hostname + u.pathname);
+    if (u.hostname === 'www.bienici.com' && u.pathname === '/realEstateAds.json') {
+      const f = JSON.parse(u.searchParams.get('filters'));
+      const z = f.zoneIdsByTypes.zoneIds;
+      const liste = [...W.annonces.values()].filter((a) => z.indexOf(a._zone) >= 0 && (f.maxPrice == null || a.price <= f.maxPrice));
+      return rep(200, { total: liste.length, realEstateAds: liste.slice(f.from, f.from + f.size) });
+    }
+    if (u.hostname === 'www.bienici.com' && u.pathname === '/realEstateAd.json') {
+      const a = W.annonces.get(u.searchParams.get('id')) || W.horsRecherche.get(u.searchParams.get('id'));
+      return a ? rep(200, a) : rep(404, { message: 'introuvable' });
+    }
+    if (PUSH.endpointAccepte(url)) { W.pushs.push({ url, o }); return rep(typeof W.statutPush === 'function' ? W.statutPush(url) : W.statutPush, null); }
+    return rep(404, null);
+  };
+  W.ctx = { kv: W.kv, fetch: W.fetch, maintenant: () => W.T, env: ENV, attendre: async () => {} };
+  W.releve = (o = {}) => SA.releve(W.ctx, Object.assign({ pause: 0 }, o));
+  W.req = async (methode, chemin, corps, origine = ORIG) => {
+    const h = { 'Content-Type': 'application/json' };
+    if (origine) h.Origin = origine;
+    const r = await SA.traiterRequete(new Request('https://alertes.test' + chemin, { method: methode, headers: h, body: corps === undefined ? undefined : (typeof corps === 'string' ? corps : JSON.stringify(corps)) }), W.ctx);
+    let c = null; try { c = await r.json(); } catch (e) { c = null; }
+    return { statut: r.status, corps: c, h: r.headers };
+  };
+  /* Messages reçus par un endpoint, déchiffrés comme le ferait le téléphone. */
+  W.recus = async (endpoint) => {
+    const n = W.navs.get(endpoint);
+    const out = [];
+    for (const p of W.pushs.filter((x) => x.url === endpoint)) {
+      const o = await essai(() => dechiffrerNavigateur(p.o.body, n.jwk, n.pub, n.auth));
+      out.push(o ? JSON.parse(TD.decode(o)) : { illisible: true });
+    }
+    return out;
+  };
+  return W;
+}
+let numAnnonce = 0;
+function annonce(o = {}) {
+  numAnnonce++;
+  return Object.assign({}, AD, { id: 'x' + numAnnonce, reference: 'R' + numAnnonce, _zone: '-91746', price: 1800, publicationDate: '2026-11-18T08:00:00Z' }, o);
+}
+const RECH = { v: 1, lieux: [{ nom: 'Bois-Colombes', type: 'city', cp: ['92270'], zoneIds: ['-91746'], etat: 'oui' }], quartiersEcartes: [], types: ['flat', 'house'], loyerMax: 1950, surfMin: 60, piecesMin: 3, chMin: 2, meuble: 'exclu', equip: { ext: 'indifferent', cave: 'indifferent', parking: 'indifferent', ascenseur: 'indifferent' }, dpeMax: '', rdc: 'indifferent', agencesSeulement: true };
+let numAb = 0;
+async function inscrire(W, o = {}) {
+  numAb++;
+  const nav = await paireNavigateur();
+  const endpoint = 'https://fcm.googleapis.com/fcm/send/abonne-' + numAb;
+  W.navs.set(endpoint, nav);
+  const corps = Object.assign({
+    abonnement: { endpoint, keys: { p256dh: nav.p256dh, auth: nav.authB64 } },
+    jeton: PUSH.b64uEnc(globalThis.crypto.getRandomValues(new Uint8Array(32))),
+    recherche: RECH, suivis: [], silence: null, declencheurs: { nouvelles: true, retirees: true, baisses: true }
+  }, o);
+  const r = await W.req('PUT', '/abonnement', corps);
+  return { endpoint, corps, r, id: await sha(endpoint) };
+}
+async function sha(s) { return [...new Uint8Array(await ST.digest('SHA-256', TE.encode(s)))].map((x) => x.toString(16).padStart(2, '0')).join(''); }
+const etatDe = (W, id) => JSON.parse(W.kv.m.get('et:' + id) || 'null');
+const abDe = (W, id) => JSON.parse(W.kv.m.get('ab:' + id) || 'null');
+const HIVER = Date.UTC(2026, 10, 18, 10, 0); /* 11 h 00 à Paris */
+
+groupe('Alertes : routes du serveur');
+{
+  const W = monde(HIVER);
+  const cle = await W.req('GET', '/cle');
+  t('GET /cle -> clé publique', cle.statut === 200 && cle.corps.publique === ENV.VAPID_PUBLIQUE && cle.h.get('Access-Control-Allow-Origin') === ORIG);
+  const pre = await SA.traiterRequete(new Request('https://alertes.test/abonnement', { method: 'OPTIONS', headers: { Origin: ORIG, 'Access-Control-Request-Method': 'PUT' } }), W.ctx);
+  t('CORS : pré-vol accepté pour une origine de la liste', pre.status === 204 && pre.headers.get('Access-Control-Allow-Origin') === ORIG && /PUT/.test(pre.headers.get('Access-Control-Allow-Methods')));
+  const a = await inscrire(W);
+  t('PUT /abonnement : inscription acceptée (201)', a.r.statut === 201, a.r);
+  const ab = abDe(W, a.id);
+  t('identifiant = SHA-256 de l’endpoint ; jeton gardé en empreinte seulement', !!ab && ab.id === a.id && ab.jeton === await sha(a.corps.jeton) && W.kv.m.get('ab:' + a.id).indexOf(a.corps.jeton) < 0);
+  t('index tenu à jour', JSON.parse(W.kv.m.get('index')).indexOf(a.id) >= 0);
+  const autre = await W.req('PUT', '/abonnement', a.corps, 'https://site-tiers.test');
+  t('CORS : origine hors liste refusée (403, sans en-tête CORS)', autre.statut === 403 && !autre.h.get('Access-Control-Allow-Origin'));
+  const sansOrig = await W.req('PUT', '/abonnement', a.corps, null);
+  t('PUT sans origine refusé', sansOrig.statut === 403);
+  const dest = await W.req('PUT', '/abonnement', Object.assign({}, a.corps, { recherche: Object.assign({}, RECH, { destinations: [] }) }));
+  t('corps contenant « destinations » rejeté, message clair', dest.statut === 400 && /trajets/.test(dest.corps.erreur), dest.corps);
+  const adr = await W.req('PUT', '/abonnement', Object.assign({}, a.corps, { adresseActuelle: { label: 'x', lat: 48.9, lon: 2.2 } }));
+  t('corps contenant « adresseActuelle » rejeté', adr.statut === 400 && /adresse actuelle/.test(adr.corps.erreur), adr.corps);
+  const prof = await W.req('PUT', '/abonnement', Object.assign({}, a.corps, { suivis: [{ id: 'bi-1', loyer: 1, destinations: [{ adresse: 'x' }] }] }));
+  t('champ interdit rejeté même enfoui', prof.statut === 400, prof.corps);
+  const mal = await W.req('PUT', '/abonnement', Object.assign({}, a.corps, { abonnement: { endpoint: 'https://exemple.test/push', keys: a.corps.abonnement.keys } }));
+  t('endpoint hors liste rejeté (400)', mal.statut === 400 && /notification/.test(mal.corps.erreur), mal.corps);
+  const vol = await W.req('PUT', '/abonnement', Object.assign({}, a.corps, { jeton: PUSH.b64uEnc(new Uint8Array(32).fill(7)) }));
+  t('jeton exigé pour modifier (403)', vol.statut === 403, vol.corps);
+  const del1 = await W.req('DELETE', '/abonnement', { endpoint: a.endpoint, jeton: PUSH.b64uEnc(new Uint8Array(32).fill(7)) });
+  t('jeton exigé pour supprimer (403)', del1.statut === 403 && !!abDe(W, a.id));
+  const meme = await W.req('PUT', '/abonnement', a.corps);
+  t('même contenu renvoyé : accepté sans écriture', meme.statut === 200 && meme.corps.inchange === true);
+  const vite = await W.req('PUT', '/abonnement', Object.assign({}, a.corps, { silence: { debut: '23:00', fin: '06:00' } }));
+  t('au plus une modification par minute (429 + Retry-After)', vite.statut === 429 && Number(vite.h.get('Retry-After')) > 0, vite.statut);
+  W.T += 61000;
+  const apres = await W.req('PUT', '/abonnement', Object.assign({}, a.corps, { silence: { debut: '23:00', fin: '06:00' } }));
+  t('modification acceptée une minute plus tard', apres.statut === 200 && abDe(W, a.id).silence.debut === '23:00');
+  const trop = await W.req('PUT', '/abonnement', JSON.stringify(Object.assign({}, a.corps, { bourrage: 'x'.repeat(33 * 1024) })));
+  t('corps > 32 Ko refusé (413)', trop.statut === 413);
+  const lieux31 = Array.from({ length: 31 }, (_, i) => ({ nom: 'L' + i, zoneIds: ['-' + (1000 + i)], etat: 'oui' }));
+  const z31 = await W.req('PUT', '/abonnement', Object.assign({}, a.corps, { recherche: Object.assign({}, RECH, { lieux: lieux31 }) }));
+  t('plus de 30 zones refusé', z31.statut === 400 && /30/.test(z31.corps.erreur), z31.corps);
+  const s201 = await W.req('PUT', '/abonnement', Object.assign({}, a.corps, { suivis: Array.from({ length: 201 }, (_, i) => ({ id: 'bi-' + i, loyer: 1000 })) }));
+  t('plus de 200 annonces suivies refusé', s201.statut === 400);
+  const champ = await W.req('PUT', '/abonnement', Object.assign({}, a.corps, { recherche: Object.assign({}, RECH, { lignesPreferees: ['13'] }) }));
+  t('champ de critères inattendu refusé', champ.statut === 400);
+  t('aucune route ne liste les abonnements', (await W.req('GET', '/abonnement')).statut === 404 && (await W.req('GET', '/index')).statut === 404 && (await W.req('GET', '/')).statut === 404);
+  const del2 = await W.req('DELETE', '/abonnement', { endpoint: a.endpoint, jeton: a.corps.jeton });
+  t('DELETE avec le bon jeton : abonnement et état effacés', del2.statut === 200 && !W.kv.m.has('ab:' + a.id) && !W.kv.m.has('et:' + a.id) && JSON.parse(W.kv.m.get('index')).indexOf(a.id) < 0);
+  W.kv.m.set('index', JSON.stringify(Array.from({ length: 300 }, (_, i) => 'id' + i)));
+  const plein = await inscrire(W);
+  t('plafond de 300 abonnements : refus poli (503)', plein.r.statut === 503 && /complet/.test(plein.r.corps.erreur), plein.r);
+  const PO2 = profilExemple();
+  const W2 = monde(HIVER);
+  const app = await inscrire(W2, { recherche: CA.rechercheAlerte(PO2), suivis: CA.suivisAlerte([]) });
+  t('corps construit par l’appli (profil d’exemple) accepté par le serveur', app.r.statut === 201, app.r.corps);
+}
+
+groupe('Alertes : relève simulée');
+{
+  /* Scénario principal : un téléphone, une recherche. */
+  const W = monde(HIVER);
+  const base = [annonce(), annonce(), annonce({ price: 1900 })];
+  base.forEach((a) => W.annonces.set(a.id, a));
+  const suivie = annonce({ price: 1850 });
+  W.annonces.set(suivie.id, suivie);
+  const a = await inscrire(W, { suivis: [{ id: 'bi-' + suivie.id, loyer: 1850 }] });
+  let r = await W.releve();
+  t('première relève silencieuse (tout marqué vu, aucune notification)', W.pushs.length === 0 && etatDe(W, a.id).init === true && Object.keys(etatDe(W, a.id).vus).length === 4, r);
+  const kvAvant = W.kv.n.put + W.kv.n.delete;
+  W.T += 15 * 60000;
+  r = await W.releve();
+  t('relève sans changement : aucune écriture KV, aucune notification', W.kv.n.put + W.kv.n.delete === kvAvant && W.pushs.length === 0, r);
+
+  const n1 = annonce({ district: { libelle: 'Bécon' }, city: 'Asnières-sur-Seine', surfaceArea: 70, price: 1725 });
+  W.annonces.set(n1.id, n1);
+  W.T += 15 * 60000;
+  r = await W.releve();
+  let m = await W.recus(a.endpoint);
+  t('annonce nouvelle conforme -> 1 notification', m.length === 1, r);
+  t('notification : titre, corps, lien, tag', m[0] && m[0].t === 'Nouvelle annonce · Asnières, Bécon' && m[0].c === '70 m² · 3 pièces · ' + fmt(1725) + ' € CC' && m[0].u === './?b=bi-' + n1.id && m[0].tag === 'sa-bi-' + n1.id, m[0]);
+
+  const cher = annonce({ price: 2000 });
+  W.annonces.set(cher.id, cher);
+  W.T += 15 * 60000;
+  r = await W.releve();
+  t('annonce nouvelle exclue (loyer au-dessus du plafond, mais renvoyée par Bien’ici) -> 0', W.pushs.length === 1 && !!etatDe(W, a.id).vus['bi-' + cher.id], r);
+
+  W.annonces.delete(suivie.id);
+  W.T += 15 * 60000;
+  r = await W.releve();
+  m = await W.recus(a.endpoint);
+  t('annonce suivie retirée (fiche 404) -> 1 notification', m.length === 2 && /^Annonce retirée · /.test(m[1].t) && r.fiches === 1, [m[1], r]);
+  t('annonce retirée enlevée des suivis côté serveur', abDe(W, a.id).suivis.length === 0);
+  W.T += 15 * 60000;
+  r = await W.releve();
+  t('pas de seconde notification pour la même annonce retirée', W.pushs.length === 2 && r.fiches === 0, r);
+
+  base[0].price = 1725;
+  W.T += 15 * 60000;
+  r = await W.releve();
+  m = await W.recus(a.endpoint);
+  t('baisse de loyer -> 1 notification', m.length === 3 && /^Loyer en baisse · /.test(m[2].t) && m[2].c === fmt(1725) + ' € (avant ' + fmt(1800) + ' €)', m[2]);
+
+  const lot = [annonce({ surfaceArea: 61 }), annonce({ surfaceArea: 62 }), annonce({ surfaceArea: 63 }), annonce({ surfaceArea: 64 })];
+  lot.forEach((x) => W.annonces.set(x.id, x));
+  W.T += 15 * 60000;
+  r = await W.releve();
+  m = await W.recus(a.endpoint);
+  t('plusieurs nouveautés -> 1 notification groupée', m.length === 4 && m[3].t === '4 nouvelles annonces' && m[3].u === './' && m[3].c.split('\n').length === 4 && /de plus$/.test(m[3].c), m[3]);
+  t('message toujours ≤ 2 Ko', m.every((x) => TE.encode(JSON.stringify(x)).length <= 2048));
+
+  /* 429 : gardé, réessayé ; 410 : abonnement effacé */
+  W.statutPush = 429;
+  W.annonces.set('z1', annonce({ id: 'z1' }));
+  W.T += 15 * 60000;
+  r = await W.releve();
+  t('429 du service : message gardé pour la relève suivante', etatDe(W, a.id).attente.length === 1 && etatDe(W, a.id).essais === 1 && r.echecsPush === 1, r);
+  W.statutPush = 201;
+  W.T += 15 * 60000;
+  r = await W.releve();
+  m = await W.recus(a.endpoint);
+  t('… puis envoyé quand le service répond', r.notifications === 1 && etatDe(W, a.id).attente.length === 0 && m[m.length - 1].u === './?b=bi-z1', r);
+  W.statutPush = 410;
+  W.annonces.set('z2', annonce({ id: 'z2' }));
+  W.T += 15 * 60000;
+  r = await W.releve();
+  t('410 du service : abonnement effacé (abonnement, état, index)', !W.kv.m.has('ab:' + a.id) && !W.kv.m.has('et:' + a.id) && JSON.parse(W.kv.m.get('index')).indexOf(a.id) < 0 && r.supprimes === 1, r);
+}
+{
+  /* Heures de silence, heure de Paris (été/hiver). */
+  t('heure de Paris en hiver (UTC+1)', SA.minutesParis(Date.UTC(2026, 0, 15, 20, 30)) === 21 * 60 + 30);
+  t('heure de Paris en été (UTC+2)', SA.minutesParis(Date.UTC(2026, 6, 15, 20, 30)) === 22 * 60 + 30);
+  t('passage à l’heure d’été (29/03/2026) : 01:30 UTC = 03:30 Paris', SA.minutesParis(Date.UTC(2026, 2, 29, 1, 30)) === 3 * 60 + 30);
+  const P = { debut: '22:00', fin: '07:00' };
+  t('silence 22:00-07:00 : 20:30 UTC = 22:30 l’été (silence), 21:30 l’hiver (pas de silence)', SA.enSilence(Date.UTC(2026, 6, 15, 20, 30), P) && !SA.enSilence(Date.UTC(2026, 0, 15, 20, 30), P));
+  t('silence de jour (12:00-14:00) et plage nulle', SA.enSilence(Date.UTC(2026, 0, 15, 12, 0), { debut: '12:00', fin: '14:00' }) && !SA.enSilence(Date.UTC(2026, 0, 15, 12, 0), { debut: '12:00', fin: '12:00' }) && !SA.enSilence(HIVER, null));
+  const W = monde(Date.UTC(2026, 10, 18, 21, 0)); /* 22 h 00 à Paris */
+  W.annonces.set('s0', annonce({ id: 's0' }));
+  const a = await inscrire(W, { silence: P });
+  await W.releve();
+  W.annonces.set('s1', annonce({ id: 's1' }));
+  W.T = Date.UTC(2026, 10, 18, 22, 30); /* 23 h 30 */
+  let r = await W.releve();
+  W.annonces.set('s2', annonce({ id: 's2' }));
+  W.T = Date.UTC(2026, 10, 19, 3, 0); /* 4 h 00 */
+  r = await W.releve();
+  t('plage de silence : notifications gardées, rien d’envoyé', W.pushs.length === 0 && etatDe(W, a.id).attente.length === 2, r);
+  W.T = Date.UTC(2026, 10, 19, 6, 15); /* 7 h 15 */
+  r = await W.releve();
+  const m = await W.recus(a.endpoint);
+  t('fin de plage : envoyées en une seule notification groupée', m.length === 1 && m[0].t === '2 nouvelles annonces' && etatDe(W, a.id).attente.length === 0, m);
+}
+{
+  /* Budget : 60 abonnements, recherches distinctes. */
+  const W = monde(HIVER);
+  for (let i = 0; i < 4; i++) W.annonces.set('b' + i, annonce({ id: 'b' + i, price: 1400 }));
+  const abs = [];
+  for (let i = 0; i < 60; i++) abs.push(await inscrire(W, { recherche: Object.assign({}, RECH, { loyerMax: 1500 + i * 5 }) }));
+  t('60 inscriptions acceptées', abs.every((x) => x.r.statut === 201));
+  const parReleve = [];
+  let initialises = 0, tours = 0;
+  while (initialises < 60 && tours < 6) {
+    const avant = W.appels.length;
+    const r = await W.releve();
+    parReleve.push([W.appels.length - avant, r.sousRequetes, r.traites]);
+    W.T += 15 * 60000; tours++;
+    initialises = abs.filter((x) => (etatDe(W, x.id) || {}).init).length;
+  }
+  t('budget : au plus 40 sous-requêtes par relève (appels réels comptés)', parReleve.every((x) => x[0] <= 40 && x[1] <= 40), parReleve);
+  t('budget : les 60 abonnements traités à tour de rôle en 2 relèves', initialises === 60 && tours === 2, [initialises, tours, parReleve]);
+  for (let i = 0; i < 3; i++) W.annonces.set('c' + i, annonce({ id: 'c' + i, price: 1400 }));
+  const notifies = new Set();
+  const parReleve2 = [];
+  for (let k = 0; k < 6 && notifies.size < 60; k++) {
+    const avant = W.appels.length;
+    await W.releve();
+    parReleve2.push(W.appels.length - avant);
+    W.pushs.forEach((p) => notifies.add(p.url));
+    W.T += 15 * 60000;
+  }
+  t('budget : recherche + notification pour 60 abonnements, ≤ 40 appels par relève', parReleve2.every((x) => x <= 40) && notifies.size === 60, [parReleve2, notifies.size]);
+  t('budget : une seule notification par téléphone et par relève', W.pushs.length === 60);
+  /* Plafond facultatif par relève (ABONNEMENTS_PAR_RELEVE) : tour de rôle conservé. */
+  const W3 = monde(HIVER);
+  W3.annonces.set('t0', annonce({ id: 't0' }));
+  const abs3 = [];
+  for (let i = 0; i < 12; i++) abs3.push(await inscrire(W3, { recherche: Object.assign({}, RECH, { loyerMax: 1500 + i }) }));
+  W3.ctx.env = Object.assign({}, ENV, { ABONNEMENTS_PAR_RELEVE: '5' });
+  const traites3 = [];
+  for (let k = 0; k < 3; k++) { traites3.push((await W3.releve()).traites); W3.T += 15 * 60000; }
+  t('plafond de 5 abonnements par relève : 12 abonnements tous initialisés en 3 relèves (tour de rôle)', traites3.join() === '5,5,5' && abs3.every((x) => (etatDe(W3, x.id) || {}).init), traites3);
+  /* Même recherche pour 60 abonnements : une seule requête partagée. */
+  const W2 = monde(HIVER);
+  W2.annonces.set('p0', annonce({ id: 'p0' }));
+  for (let i = 0; i < 60; i++) await inscrire(W2);
+  const r2 = await W2.releve();
+  t('mêmes filtres : une seule recherche Bien’ici pour 60 abonnements', W2.appels.filter((x) => /realEstateAds/.test(x)).length === 1 && r2.traites === 60, r2);
+}
+{
+  /* Oubli après 45 jours sans nouvelles du téléphone. */
+  const W = monde(HIVER);
+  W.annonces.set('o0', annonce({ id: 'o0' }));
+  const a = await inscrire(W), b = await inscrire(W);
+  await W.releve();
+  const ab = abDe(W, a.id); ab.contactLe = W.T - 46 * 86400000; W.kv.m.set('ab:' + a.id, JSON.stringify(ab));
+  const bb = abDe(W, b.id); bb.contactLe = W.T - 44 * 86400000; W.kv.m.set('ab:' + b.id, JSON.stringify(bb));
+  W.T += 15 * 60000;
+  const r = await W.releve();
+  t('expiration : 46 jours sans contact -> effacé ; 44 jours -> gardé', !W.kv.m.has('ab:' + a.id) && !W.kv.m.has('et:' + a.id) && W.kv.m.has('ab:' + b.id) && JSON.parse(W.kv.m.get('index')).join() === b.id, r);
+  /* Changement des filtres : nouvelle base silencieuse, pas de rafale. */
+  for (let i = 0; i < 5; i++) W.annonces.set('q' + i, annonce({ id: 'q' + i, _zone: '-91738' }));
+  W.T += 61000;
+  const maj = await W.req('PUT', '/abonnement', Object.assign({}, b.corps, { recherche: Object.assign({}, RECH, { lieux: RECH.lieux.concat([{ nom: 'Colombes', zoneIds: ['-91738'], etat: 'oui' }]) }) }));
+  W.T += 15 * 60000;
+  const r2 = await W.releve();
+  t('lieu ajouté aux critères : relève suivante silencieuse (pas de rafale)', maj.statut === 200 && W.pushs.length === 0 && Object.keys(etatDe(W, b.id).vus).length === 6, [maj.statut, r2]);
+}
+
+groupe('Alertes : application');
+{
+  const PO3 = profilExemple();
+  const env = CA.rechercheAlerte(PO3);
+  const txt = JSON.stringify(env);
+  t('critères envoyés : ni destinations ni adresse actuelle', !('destinations' in env) && !('adresseActuelle' in env) && !CA.contientChampInterdit(env));
+  t('critères envoyés : aucune adresse de trajet ni adresse actuelle dans le texte', PO3.destinations.every((d) => txt.indexOf(d.adresse) < 0 && txt.indexOf(String(d.lat)) < 0) && txt.indexOf(PO3.adresseActuelle.label) < 0);
+  t('critères envoyés : ni préférences de transport ni date de sortie', !('lignesPreferees' in env) && !('modes' in env) && !('sortie' in env) && !('marcheMax' in env));
+  t('critères envoyés : lieux et fourchettes présents', env.lieux.length === 3 && env.loyerMax === 1950 && env.surfMin === 60 && env.piecesMin === 3);
+  t('critères envoyés : l’objet de l’appli n’est pas modifié', Array.isArray(PO3.destinations) && PO3.destinations.length === 2);
+  const biens = [
+    { id: 'bi-1', src: 'bienici', cote: true, loyer: 1700 },
+    { id: 'bi-2', src: 'bienici', status: 'visite', loyer: 1800 },
+    { id: 'bi-3', src: 'bienici', status: 'nouveau', loyer: 1600 },
+    { id: 'bi-4', src: 'bienici', cote: true, dispo: 'retiree', loyer: 1500 },
+    { id: 'm-5', src: 'manuel', cote: true, loyer: 1400, notes: 'note privée' }
+  ];
+  const sv = CA.suivisAlerte(biens);
+  t('suivis envoyés : mis de côté ou suivis, en ligne, Bien’ici, numéro et loyer seulement', JSON.stringify(sv) === JSON.stringify([{ id: 'bi-1', loyer: 1700 }, { id: 'bi-2', loyer: 1800 }]), sv);
+  const { ALERTES_URL: AU } = await import('../js/config.js');
+  const AL = await import('../js/alertes.js');
+  const fetchAvant = globalThis.fetch;
+  let appels = 0;
+  globalThis.fetch = async () => { appels++; return new Response('{}'); };
+  try {
+    if (!AU) {
+      const a1 = await AL.activer(), s1 = await AL.syncMaintenant(true);
+      AL.synchroniser(); AL.modifierReglages({ silenceActif: false });
+      const d1 = await AL.desactiver();
+      t('ALERTES_URL vide : rien d’actif, aucun appel réseau', !AL.disponible() && AL.capacite() === 'indisponible' && a1 === 'indisponible' && s1 === 'inactif' && d1 === 'indisponible' && appels === 0 && AL.A.actif === false, [a1, s1, d1, appels]);
+    } else t('ALERTES_URL renseigné : module disponible', AL.disponible());
+  } finally { globalThis.fetch = fetchAvant; }
+  const srcApp = readFileSync(join(APP, 'js', 'app.js'), 'utf8');
+  t('ALERTES_URL vide : aucun import statique du code d’alerte, chargement sous condition', !/^import[^\n]*alertes/m.test(srcApp) && /if \(ALERTES_URL\) \{\s*try \{ alertesUI = await import\('\.\/ui\/alertes-ui\.js'\)/.test(srcApp));
+  const srcCrit = readFileSync(join(APP, 'js', 'ui', 'criteres-ui.js'), 'utf8');
+  t('section « Alertes » absente sans le module', /crochets\.alertes \? SECTIONS\.concat/.test(srcCrit) && !/^import[^\n]*alertes/m.test(srcCrit));
+  /* Politique de sécurité : l'origine du serveur d'alertes doit figurer dans connect-src. */
+  const csp = (readFileSync(join(APP, 'index.html'), 'utf8').match(/Content-Security-Policy" content="([^"]+)"/) || [])[1] || '';
+  const connect = ((csp.split(';').map((x) => x.trim()).find((x) => x.startsWith('connect-src')) || '').split(/\s+/)).slice(1);
+  const couvre = (u) => connect.indexOf(new URL(u).origin) >= 0;
+  t('connect-src lu dans index.html', connect.indexOf('https://www.bienici.com') >= 0);
+  t('test de cohérence efficace : une origine absente de connect-src est détectée', !couvre('https://suivi-appart-alertes.exemple.workers.dev'));
+  t('ALERTES_URL : son origine figure dans connect-src (ou ALERTES_URL vide)', !AU || couvre(AU), AU);
+  t('ALERTES_URL : https et sans barre finale (ou vide)', !AU || (/^https:\/\//.test(AU) && !/\/$/.test(AU)));
+  const swSrc = readFileSync(join(APP, 'sw.js'), 'utf8');
+  t('service worker : push, notificationclick, pushsubscriptionchange', /addEventListener\('push'/.test(swSrc) && /addEventListener\('notificationclick'/.test(swSrc) && /addEventListener\('pushsubscriptionchange'/.test(swSrc) && /showNotification\(/.test(swSrc));
+}
+
+groupe('Alertes : cohérence du code');
+{
+  const { spawnSync } = await import('node:child_process');
+  const tous = [join(APP, 'sw.js'), join(APP, 'tests', 'run.mjs')]
+    .concat(fichiers(join(APP, 'js'), ['.js']))
+    .concat(readdirSync(join(APP, 'serveur', 'src')).map((f) => join(APP, 'serveur', 'src', f)))
+    .concat(readdirSync(join(APP, 'serveur', 'outils')).map((f) => join(APP, 'serveur', 'outils', f)));
+  const ko2 = tous.filter((f) => spawnSync(process.execPath, ['--check', f], { encoding: 'utf8' }).status !== 0);
+  t('node --check : ' + tous.length + ' fichiers JS (appli, service worker, serveur, tests)', ko2.length === 0, ko2);
+  const srv = readdirSync(join(APP, 'serveur', 'src')).map((f) => join(APP, 'serveur', 'src', f)).concat(readdirSync(join(APP, 'serveur', 'outils')).map((f) => join(APP, 'serveur', 'outils', f)));
+  let kos = [];
+  for (const f of srv) {
+    const src = readFileSync(f, 'utf8');
+    for (const mt of src.matchAll(/import\s*\{([^}]+)\}\s*from\s*'([^']+)'/g)) {
+      const cible = resolve(dirname(f), mt[2]);
+      let csrc; try { csrc = readFileSync(cible, 'utf8'); } catch (e) { kos.push(f + ' -> ' + mt[2]); continue; }
+      for (let nom of mt[1].split(',')) { nom = nom.trim().split(/\s+as\s+/)[0]; if (nom && !new RegExp('export\\s+(async\\s+)?(function|const|let|class)\\s+' + nom + '\\b').test(csrc)) kos.push(f.replace(APP + '/', '') + ' : ' + nom); }
+    }
+    for (const mt of src.matchAll(/https?:\/\/([a-z0-9.*-]+)/gi)) kos.push(f.replace(APP + '/', '') + ' : adresse en dur ' + mt[1]);
+  }
+  t('serveur : chaque nom importé est exporté, aucune adresse en dur', kos.length === 0, kos);
+  const imports = [...readFileSync(join(APP, 'serveur', 'src', 'alertes.js'), 'utf8').matchAll(/from '(\.\.\/\.\.\/js\/[^']+)'/g)].map((x) => x[1]);
+  t('serveur : réutilise le code de l’appli (bienici, criteres, score, util, config, alertes)', ['bienici', 'criteres', 'score', 'util', 'config', 'alertes'].every((m) => imports.some((i) => i.indexOf('/' + m + '.js') >= 0)), imports);
+  const wr = readFileSync(join(APP, 'serveur', 'wrangler.toml'), 'utf8');
+  t('wrangler.toml : nom, main, cron 15 min, KV ALERTES, variables, aucun secret', /name = "suivi-appart-alertes"/.test(wr) && /main = "src\/worker\.js"/.test(wr) && /crons = \["\*\/15 \* \* \* \*"\]/.test(wr) && /binding = "ALERTES"/.test(wr) && /ORIGINES =/.test(wr) && /VAPID_PUBLIQUE =/.test(wr) && /VAPID_SUJET =/.test(wr) && !/"d"\s*:/.test(wr) && !/^VAPID_PRIVEE\s*=/m.test(wr));
+}
 
 /* ---------------- Réseau ---------------- */
 async function reseau() {

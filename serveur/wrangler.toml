@@ -1,0 +1,30 @@
+# Serveur d'alertes de Suivi appart (Cloudflare Workers, offre gratuite).
+# Mise en service pas à pas : voir LISEZMOI.md.
+name = "suivi-appart-alertes"
+main = "src/worker.js"
+compatibility_date = "2025-06-01"
+workers_dev = true
+
+# Relève toutes les 15 minutes.
+[triggers]
+crons = ["*/15 * * * *"]
+
+# Stockage clé-valeur : abonnements, état de chaque abonnement, index, curseur.
+# Créer l'espace avec « npx wrangler kv namespace create ALERTES » puis coller l'id rendu ci-dessous.
+[[kv_namespaces]]
+binding = "ALERTES"
+id = "A_REMPLIR"
+
+[vars]
+# Origines autorisées à s'inscrire (séparées par des virgules, sans chemin ni barre finale).
+ORIGINES = "https://oliviervehert-maker.github.io"
+# Clé publique VAPID (base64url, 65 octets) : sortie de « node outils/generer-cles.mjs ».
+VAPID_PUBLIQUE = ""
+# Facultatif : plafond d'abonnements traités par relève (offre gratuite : 10 ms de CPU par exécution, voir LISEZMOI).
+# ABONNEMENTS_PAR_RELEVE = "2"
+# Contact de l'exploitant transmis aux services de notification (mailto: ou https:).
+VAPID_SUJET = "https://github.com/oliviervehert-maker/suivi-appart/issues"
+
+# Secret, JAMAIS dans ce fichier :
+#   npx wrangler secret put VAPID_PRIVEE
+# puis coller la clé privée JWK (une ligne JSON) affichée par outils/generer-cles.mjs.

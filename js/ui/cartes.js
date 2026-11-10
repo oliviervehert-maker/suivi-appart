@@ -247,11 +247,24 @@ export function rendreEntete(ev) {
 
 export function toutEvaluer() { return S.biens.map(evalBien); }
 
+/* Annonce à montrer en tête (ouverture depuis une notification) : gardée jusqu'au prochain choix de filtre ou de tri. */
+let enTete = null;
+export function mettreEnTete(id) {
+  enTete = id || null;
+  if (!enTete) return false;
+  const b = S.parId.get(enTete);
+  if (!b) { enTete = null; return false; }
+  const x = evalBien(b);
+  if (!filtrer([x], S.reglages.filtre).length) S.reglages.filtre = 'tous';
+  return true;
+}
+
 export function rendreListe(o = {}) {
   if (o.reinitialiser) limite = PAS;
   const ev = toutEvaluer();
   rendreEntete(ev);
   const list = trier(filtrer(ev, S.reglages.filtre), S.reglages.tri);
+  if (enTete) { const i = list.findIndex((x) => x.b.id === enTete); if (i > 0) list.unshift(list.splice(i, 1)[0]); }
   const cards = document.getElementById('cards');
   const plus = document.getElementById('more-row');
   if (!S.biens.length) {

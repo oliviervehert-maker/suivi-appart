@@ -3,7 +3,8 @@ import { S, bien, ajouterBien, sauverReglages, ui } from '../etat.js';
 import { esc, fmt, dateFr, moisCourt, ilYA, num, uid } from '../core/util.js';
 import { evaluer, trajetRetenu } from '../core/score.js';
 import { STATUTS, estSuivi } from '../core/fusion.js';
-import { APP_NOM, APP_VERSION, CONTACT_APP } from '../config.js';
+import { APP_NOM, APP_VERSION, CONTACT_APP, ALERTES_URL } from '../config.js';
+import { hoteAlertes } from '../net.js';
 import { enrPour } from '../enrichissement.js';
 import { geocoder } from './adresse.js';
 import { LABEL } from './cartes.js';
@@ -84,7 +85,9 @@ export function rendreSources() {
   document.getElementById('journal').innerHTML = r.derniere ? '<div><b>' + esc(dateFr(r.derniere, true)) + '</b> · ' + r.nb + ' annonce' + (r.nb > 1 ? 's' : '') + ' lue' + (r.nb > 1 ? 's' : '') + (r.borneAtteinte ? ' · limite de 300 atteinte : resserrer les critères pour tout voir' : '') + '</div>' +
     (r.parLieu || []).map((l) => '<div>' + esc(l.nom) + ' : ' + (l.echec ? 'échec réseau' : l.total + ' annonce' + (l.total > 1 ? 's' : '') + (l.lus !== l.total ? ', ' + l.lus + ' lues' : '')) + '</div>').join('') : 'Aucune recherche pour l’instant.';
   document.getElementById('vie-privee').innerHTML =
-    '<p><b>Sur ce téléphone seulement :</b> critères, annonces vues, statuts, notes, biens mis de côté, visites, calculs de trajets et d’arrêts. Il n’existe aucun serveur propre à l’application : pas de compte, pas de cookie, pas de mesure d’audience.</p>' +
+    '<p><b>Sur ce téléphone seulement :</b> critères, annonces vues, statuts, notes, biens mis de côté, visites, calculs de trajets et d’arrêts. ' +
+      (ALERTES_URL ? 'Le seul serveur propre à l’application est celui des alertes, facultatif (ci-dessous) : pas de compte, pas de cookie, pas de mesure d’audience.</p>' : 'Il n’existe aucun serveur propre à l’application : pas de compte, pas de cookie, pas de mesure d’audience.</p>') +
+    (ALERTES_URL ? '<p><b>Alertes par notification (facultatives, coupées tant qu’elles ne sont pas activées dans Critères) :</b> le serveur d’alertes (' + esc(hoteAlertes()) + ') interroge Bien’ici toutes les 15 minutes à la place du téléphone et le réveille par une notification. Il reçoit uniquement : les critères de recherche (ce que Bien’ici reçoit déjà : lieux, type de bien, plafond et minimums ; plus les exigences sur le logement et les quartiers écartés, nécessaires pour écarter les mêmes annonces que l’application), les numéros des annonces suivies avec leur dernier loyer, et l’adresse technique de notification du téléphone. Il garde la liste des annonces déjà vues et leur loyer. Jamais les adresses des trajets, ni l’adresse actuelle, ni les notes, ni un nom ou un e-mail. Tout est effacé quand les alertes sont coupées (ou par « Tout effacer »), et après 45 jours sans nouvelles du téléphone. La notification passe chiffrée par le service du fabricant du téléphone (Apple, Google, Mozilla ou Microsoft), qui ne peut pas la lire.</p>' : '') +
     '<p><b>Services contactés directement par le téléphone, et ce qu’ils reçoivent :</b></p><ul>' +
     '<li><b>Bien’ici</b> (www.bienici.com, res.bienici.com) : les lieux de recherche et les fourchettes envoyées (type de bien, loyer plafond, surface et pièces minimum) ; le texte tapé dans « Ajouter une commune » ; le numéro des annonces suivies, pour vérifier qu’elles sont en ligne. Les photos viennent de file.bienici.com, qui renvoie vers son stockage d’images.</li>' +
     '<li><b>Transitous</b> (api.transitous.org) : la position approchée de l’annonce, les coordonnées de chaque destination et l’heure d’arrivée ; hors Île-de-France, la position approchée pour lister les arrêts proches. Il reçoit aussi l’adresse du site qui héberge l’application, qu’il demande pour identifier les applications qui l’utilisent.</li>' +

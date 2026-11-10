@@ -1,5 +1,5 @@
 /* Point d'entrée : chargement, actualisation, événements. */
-import { APP_NOM, APP_VERSION, RECHERCHE_AUTO_MIN } from './config.js';
+import { APP_NOM, APP_VERSION, RECHERCHE_AUTO_MIN, ALERTES_URL } from './config.js';
 import * as store from './store.js';
 import { S, ui, charger, definirBiens, bien, modifierBien, remplacerBien, retirerBien, sauverReglages, sauverCriteresMaintenant, definirCriteres } from './etat.js';
 import { rechercher, verifierFiche } from './recherche.js';
@@ -7,8 +7,8 @@ import { fusionner, appliquerVerif } from './core/fusion.js';
 import { criteresNeutres, resumeCriteres } from './core/criteres.js';
 import { ilYA, esc } from './core/util.js';
 import { chargerCaches, planifier, progres } from './enrichissement.js';
-import { rendreListe, rendreEntete, majCarte, carteHTML, evalBien, afficherPlus, toutEvaluer } from './ui/cartes.js';
-import { rendreCriteres, majResumes, rendreLignes, rendreQuartiers, clic as clicCrit, change as changeCrit, touche as toucheCrit } from './ui/criteres-ui.js';
+import { rendreListe, rendreEntete, majCarte, carteHTML, evalBien, afficherPlus, toutEvaluer, mettreEnTete } from './ui/cartes.js';
+import { rendreCriteres, majResumes, rendreLignes, rendreQuartiers, clic as clicCrit, change as changeCrit, touche as toucheCrit, crochets } from './ui/criteres-ui.js';
 import { rendreSuivi, rendreSources, ouvrirMail, copierMail, ouvrirPhotos, ouvrirManuel, exporterTableur, cocherDossier } from './ui/divers.js';
 import { exporterDonnees, importerFichier, toutEffacer, donneesAPartager } from './ui/donnees.js';
 import { encoderLien, decoderLien, codeDansTexte } from './core/partage.js';
@@ -17,6 +17,10 @@ import { ouvrirAccueil, clicAccueil } from './ui/accueil.js';
 const $ = (id) => document.getElementById(id);
 let ongletCourant = 'biens';
 let signatureFaite = null;
+
+/* Alertes par notification : module chargé seulement si ALERTES_URL est renseigné ; sinon aucun appel. */
+let alertesUI = null;
+function syncAlertes() { if (alertesUI) alertesUI.modifie(); }
 
 /* ---------- en-tête et ligne d'état ---------- */
 function signature() {
@@ -104,7 +108,13 @@ function planifierEnr(o = {}) {
 }
 
 /* ---------- actualisation ---------- */
-async function actualiser() {
+/* Une seule actualisation à la fois ; un second appel attend la même. */
+let actualisationEnCours = null;
+function actualiser() {
+  if (!actualisationEnCours) actualisationEnCours = actualiserInterne().finally(() => { actualisationEnCours = null; });
+  return actualisationEnCours;
+}
+async function actualiserInterne() {
   if (S.run.enCours) return;
   if (!S.C.lieux.length) { allerA('criteres'); return; }
   S.run.enCours = true; S.run.erreur = null; S.run.texte = 'Recherche en cours…'; majRun();
@@ -135,12 +145,13 @@ async function actualiser() {
   S.run.enCours = false; S.run.texte = '';
   toutRendre();
   planifierEnr({ reessayer: true, delai: 50 });
+  syncAlertes();
 }
 ui.toutRendre = toutRendre;
 ui.biensModifies = () => { toutRendre(); planifierEnr(); };
 let tCrit = null;
 ui.critereModifie = () => {
-  majEntete(); majRun();
+  majEntete(); majRun(); syncAlertes();
   clearTimeout(tCrit);
   tCrit = setTimeout(() => { demanderListe({ reinitialiser: true }); planifierEnr(); }, 300);
 };
@@ -171,9 +182,9 @@ document.addEventListener('click', async (ev) => {
   if (d.v) { allerA(d.v); return; }
   if (d.goto) { allerA(d.goto); return; }
   if (t.id === 'refresh') { actualiser(); return; }
-  if (d.f) { S.reglages.filtre = d.f; sauverReglages(); rendreListe({ reinitialiser: true }); return; }
+  if (d.f) { mettreEnTete(null); S.reglages.filtre = d.f; sauverReglages(); rendreListe({ reinitialiser: true }); return; }
   if (t.id === 'more') { afficherPlus(); return; }
-  if (d.keep) { const b = bien(d.keep); if (b) { await modifierBien(b.id, { cote: !b.cote }); majCarte(b.id); rendreEntete(toutEvaluer()); planifierEnr(); } return; }
+  if (d.keep) { const b = bien(d.keep); if (b) { await modifierBien(b.id, { cote: !b.cote }); majCarte(b.id); rendreEntete(toutEvaluer()); planifierEnr(); syncAlertes(); } return; }
   if (d.vu) { const b = bien(d.vu); if (b) { const vus = Object.assign({}, b.vus || {}); vus[d.k] = true; await modifierBien(b.id, { vus }); rendreEntete(toutEvaluer()); } return; }
   if (d.ph) { ouvrirPhotos(d.ph, Number(d.i)); return; }
   if (d.mail) { ouvrirMail(d.mail); return; }
@@ -193,6 +204,7 @@ document.addEventListener('click', async (ev) => {
   if (t.id === 'data-coller' || t.id === 'o-coller') { collerLien(); return; }
   if (t.id === 'data-clear') {
     if (!window.confirm('Tout effacer sur cet appareil : critères, annonces, notes, calculs ? Action définitive.')) return;
+    if (alertesUI) await alertesUI.couper();
     await toutEffacer();
     S.C = criteresNeutres(); S.reglages = { filtre: 'pistes', tri: 'score', onglet: 'biens', dossier: [], sectionsOuvertes: ['ou'], accueilFait: false };
     S.run = { derniere: null, enCours: false, erreur: null, texte: '', parLieu: [], borneAtteinte: false, nb: 0 };
@@ -212,9 +224,10 @@ document.addEventListener('change', async (ev) => {
     const el = t.closest('article.card');
     if (m && el) el.outerHTML = carteHTML(evalBien(m));
     rendreEntete(toutEvaluer());
+    syncAlertes();
     return;
   }
-  if (t.id === 'sort') { S.reglages.tri = t.value; sauverReglages(); rendreListe({ reinitialiser: true }); return; }
+  if (t.id === 'sort') { mettreEnTete(null); S.reglages.tri = t.value; sauverReglages(); rendreListe({ reinitialiser: true }); return; }
   if (t.dataset.note !== undefined) { await modifierBien(t.dataset.note, { notes: t.value.slice(0, 500) }); return; }
   if (t.dataset.visite !== undefined) { await modifierBien(t.dataset.visite, { visite: { le: t.value } }); return; }
   if (t.dataset.dos !== undefined) { cocherDossier(Number(t.dataset.dos), t.checked); return; }
@@ -251,6 +264,7 @@ async function importerTexte(texte) {
     $('onb').hidden = true;
     rendreCriteres(); toutRendre({ reinitialiser: true });
     if (S.C.lieux.length && signature() !== signatureFaite) actualiser(); else planifierEnr();
+    syncAlertes();
     if (ongletCourant !== 'sources') window.alert(r);
     return true;
   } catch (e) { msg.textContent = e.message || 'Import impossible.'; window.alert(e.message || 'Import impossible.'); return false; }
@@ -303,8 +317,31 @@ function enregistrerSW() {
   });
 }
 
+/* ---------- ouverture d'une annonce (lien ./?b=<id> d'une notification) ---------- */
+function idDepuisLien(u) {
+  try { const b = new URL(u, location.href).searchParams.get('b'); return b && /^[A-Za-z0-9_.-]{1,120}$/.test(b) ? b : null; } catch (e) { return null; }
+}
+/* Le paramètre est lu puis retiré de l'adresse avant tout. */
+function cibleDansAdresse() {
+  const id = idDepuisLien(location.href);
+  if (!new URLSearchParams(location.search).has('b')) return null;
+  const p = new URLSearchParams(location.search); p.delete('b');
+  try { history.replaceState(null, '', location.pathname + (p.toString() ? '?' + p.toString() : '') + location.hash); } catch (e) { /* adresse laissée telle quelle */ }
+  return id;
+}
+async function ouvrirAnnonce(id) {
+  if (!id) return;
+  $('onb').hidden = true; fermer('sheet'); fermer('viewer');
+  allerA('biens');
+  if (S.C.lieux.length && navigator.onLine !== false) await actualiser();
+  if (mettreEnTete(id)) { sauverReglages(); rendreListe({ reinitialiser: true }); window.scrollTo(0, 0); return; }
+  const n = $('notice');
+  if (n.hidden) { n.textContent = 'Annonce de la notification introuvable sur cet appareil : sans doute retirée ou hors des critères.'; n.hidden = false; }
+}
+
 /* ---------- démarrage ---------- */
 async function demarrer() {
+  const cible = cibleDansAdresse();
   document.title = APP_NOM;
   $('app-nom').textContent = APP_NOM;
   try { await charger(); } catch (e) { S.memoireSeule = true; }
@@ -314,13 +351,25 @@ async function demarrer() {
   signatureFaite = store.lire('signature', null);
   S.run.nb = store.lire('nb', 0);
   $('sort').value = S.reglages.tri || 'score';
+  if (ALERTES_URL) {
+    try { alertesUI = await import('./ui/alertes-ui.js'); alertesUI.init(); crochets.alertes = alertesUI; } catch (e) { alertesUI = null; crochets.alertes = null; }
+  }
   rendreCriteres();
   toutRendre({ reinitialiser: true });
   allerA(['biens', 'suivi', 'criteres', 'sources'].indexOf(S.reglages.onglet) >= 0 ? S.reglages.onglet : 'biens');
   $('version').textContent = APP_NOM + ' ' + APP_VERSION;
   enregistrerSW();
-  setInterval(majRun, 30000);
+  setInterval(() => { majRun(); if (alertesUI) alertesUI.maj(); }, 30000);
+  if (alertesUI) {
+    alertesUI.demarrage();
+    if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', (ev) => {
+      const d = ev.data || {};
+      if (d.type === 'ouvrir') { const id = idDepuisLien(d.u || './'); if (id) ouvrirAnnonce(id); else { allerA('biens'); if (S.C.lieux.length) actualiser(); } }
+      if (d.type === 'abonnement-change') alertesUI.syncMaintenant(true);
+    });
+  }
   if (await importerDepuisAdresse()) return;
+  if (cible) { ouvrirAnnonce(cible); return; }
   if (!S.reglages.accueilFait && !S.C.lieux.length && !S.biens.length) {
     ouvrirAccueil(() => { rendreCriteres(); toutRendre({ reinitialiser: true }); actualiser(); });
     return;

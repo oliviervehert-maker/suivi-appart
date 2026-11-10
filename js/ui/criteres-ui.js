@@ -27,6 +27,9 @@ const SECTIONS = [
   ['ou', 'Où'], ['budget', 'Budget'], ['surface', 'Surface et pièces'], ['logement', 'Logement'],
   ['trajets', 'Trajets du quotidien'], ['transports', 'Transports à proximité'], ['annonceurs', 'Annonceurs'], ['calendrier', 'Calendrier']
 ];
+/* Section « Alertes » : n'existe que si app.js a chargé son module (ALERTES_URL renseigné). */
+export const crochets = { alertes: null };
+function sections() { return crochets.alertes ? SECTIONS.concat([['alertes', 'Alertes']]) : SECTIONS; }
 
 export function resumeSection(id) {
   const C = S.C;
@@ -38,10 +41,11 @@ export function resumeSection(id) {
   if (id === 'transports') { const m = MODES_ARRET.filter((x) => C.modes[x] === 'indispensable').map((x) => NOMS_MODES[x].toLowerCase()); return (m.length ? m.join(' ou ') + ' indispensable, ' : '') + '≤ ' + C.marcheMax + ' min à pied'; }
   if (id === 'annonceurs') return C.agencesSeulement ? 'professionnels seulement' : 'tous';
   if (id === 'calendrier') return C.sortie ? 'sortie le ' + C.sortie.split('-').reverse().join('/') : 'aucune date';
+  if (id === 'alertes' && crochets.alertes) return crochets.alertes.resume();
   return '';
 }
 export function majResumes() {
-  for (const [id] of SECTIONS) { const el = document.querySelector('[data-rs="' + id + '"]'); if (el) el.textContent = resumeSection(id); }
+  for (const [id] of sections()) { const el = document.querySelector('[data-rs="' + id + '"]'); if (el) el.textContent = resumeSection(id); }
 }
 
 function corps(id) {
@@ -75,16 +79,18 @@ function corps(id) {
     '<div class="field col"><div class="lbl">Lignes trouvées autour des annonces<em>Toucher pour ajouter aux préférées</em></div><div class="tags" id="l-sugg"></div></div>' +
     '<p class="meta">Arrêts : Île-de-France Mobilités en Île-de-France, Transitous ailleurs. Minutes à pied estimées : distance à vol d’oiseau × 1,25, à 75 m par minute.</p>';
   if (id === 'annonceurs') return champ('Agences et professionnels seulement', 'annonces de particuliers écartées', '<button class="toggle" type="button" data-bool="agencesSeulement" aria-pressed="' + C.agencesSeulement + '" aria-label="Agences et professionnels seulement"></button>');
+  if (id === 'alertes' && crochets.alertes) return crochets.alertes.corps();
   if (id === 'calendrier') return champ('Date de sortie du logement', 'facultatif, compte à rebours en haut', '<span class="row" style="gap:6px"><input type="date" class="visite-in" id="c-sortie" value="' + esc(C.sortie) + '"><button class="x" type="button" data-sortie-x="1">Effacer</button></span>');
   return '';
 }
 
 export function rendreCriteres() {
   const ouv = S.reglages.sectionsOuvertes || [];
-  document.getElementById('criteres').innerHTML = SECTIONS.map(([id, t]) =>
+  document.getElementById('criteres').innerHTML = sections().map(([id, t]) =>
     '<details class="sect" data-sect="' + id + '"' + (ouv.indexOf(id) >= 0 ? ' open' : '') + '><summary><span class="tt">' + t + '</span><span class="rs" data-rs="' + id + '">' + esc(resumeSection(id)) + '</span></summary><div class="body">' + corps(id) + '</div></details>'
   ).join('');
   rendreLieux(); rendreQuartiers(); rendreDestinations(); rendreLignes();
+  if (crochets.alertes) crochets.alertes.maj();
   brancherLieux(document.getElementById('lieu-q'), document.getElementById('lieu-sugg'), (l) => { ajouterLieu(l); document.getElementById('lieu-q').value = ''; document.getElementById('lieu-sugg').innerHTML = ''; });
   brancherAdresse(document.getElementById('actuelle-q'), document.getElementById('actuelle-sugg'), (a) => {
     S.C.adresseActuelle = { label: a.label, lat: a.lat, lon: a.lon };

@@ -1,7 +1,12 @@
 /* Nom de l'application : une seule constante (avec manifest.webmanifest et <title>). */
 export const APP_NOM = 'Suivi appart';
 /* Doit rester égal à VERSION dans sw.js. */
-export const APP_VERSION = '1.1.0';
+export const APP_VERSION = '1.2.0';
+
+/* Serveur d'alertes par notification (facultatif, voir serveur/LISEZMOI.md), sans barre finale.
+   Chaîne vide : la fonction est entièrement masquée et aucun code d'alerte ne s'exécute.
+   À la mise en service, ajouter aussi son origine à connect-src dans index.html (un test le vérifie). */
+export const ALERTES_URL = '';
 
 /* Seuls hôtes contactés par l'application (en plus d'elle-même). */
 export const HOTES_AUTORISES = [

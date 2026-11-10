@@ -9,6 +9,7 @@ Application web de recherche de location, à ouvrir dans le navigateur du télé
 ## Vie privée
 
 Aucun serveur, aucun compte, aucune mesure d'audience. Les critères, les adresses et les notes restent sur l'appareil.
+Seule exception, facultative et désactivée tant qu'elle n'est pas mise en service : les alertes par notification, servies par un petit serveur décrit dans [serveur/LISEZMOI.md](serveur/LISEZMOI.md) (il ne reçoit jamais les adresses des trajets, l'adresse actuelle ni les notes).
 Le téléphone interroge directement, sans intermédiaire :
 
 | Service | Ce qu'il reçoit |

@@ -318,3 +318,12 @@ nav.tabs .dot{position:relative}
 nav.tabs .dot b{position:absolute;top:-4px;right:-12px;background:var(--bad);color:#fff;font-size:10px;line-height:1;border-radius:99px;padding:2px 5px}
 
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* Alertes (onglet Critères) : emplacements réservés, la section ne change pas de hauteur selon l'état. */
+.toggle:disabled{opacity:.45;cursor:default}
+.al-etat{margin:0;font-size:13px;line-height:1.4;min-height:5.6em}
+.al-actions{display:flex;justify-content:flex-end;min-height:var(--tap)}
+.al-case{cursor:pointer}
+.al-case input{width:24px;height:24px;flex:none;margin:0 10px 0 0;accent-color:var(--accent)}
+.al-plage{display:inline-flex;align-items:center;gap:8px;flex:none}
+.al-plage input{width:7.5em}
