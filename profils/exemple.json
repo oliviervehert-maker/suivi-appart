@@ -1,0 +1,104 @@
+{
+  "type": "suivi-appart-profil",
+  "version": 1,
+  "nom": "Profil d’exemple",
+  "criteres": {
+    "lieux": [
+      {
+        "nom": "Asnières-sur-Seine",
+        "type": "city",
+        "cp": [
+          "92600"
+        ],
+        "zoneIds": [
+          "-91641"
+        ],
+        "etat": "oui"
+      },
+      {
+        "nom": "Bois-Colombes",
+        "type": "city",
+        "cp": [
+          "92270"
+        ],
+        "zoneIds": [
+          "-91746"
+        ],
+        "etat": "oui"
+      },
+      {
+        "nom": "Courbevoie",
+        "type": "city",
+        "cp": [
+          "92400"
+        ],
+        "zoneIds": [
+          "-91768"
+        ],
+        "etat": "oui"
+      }
+    ],
+    "quartiersEcartes": [],
+    "types": [
+      "flat"
+    ],
+    "loyerIdeal": 1850,
+    "loyerMax": 1950,
+    "surfMin": 60,
+    "surfCible": 65,
+    "surfMax": 90,
+    "piecesMin": 3,
+    "chMin": 2,
+    "meuble": "exclu",
+    "equip": {
+      "ext": "bonus",
+      "cave": "bonus",
+      "parking": "indifferent",
+      "ascenseur": "indifferent"
+    },
+    "dpeMax": "",
+    "rdc": "indifferent",
+    "agencesSeulement": true,
+    "sortie": "2027-06-30",
+    "marcheMax": 10,
+    "modes": {
+      "metro": "indispensable",
+      "train": "indispensable",
+      "tram": "indifferent",
+      "bus": "indifferent"
+    },
+    "lignesPreferees": [],
+    "lignesEvitees": [],
+    "destinations": [
+      {
+        "id": "d-ecole",
+        "nom": "École",
+        "adresse": "Place de la Madeleine 75008 Paris",
+        "lat": 48.86997,
+        "lon": 2.32456,
+        "heure": "08:30",
+        "mode": "transit",
+        "dureeMax": 40,
+        "corrMax": null,
+        "importance": "important"
+      },
+      {
+        "id": "d-travail",
+        "nom": "Travail",
+        "adresse": "Stade de France 93200 Saint-Denis",
+        "lat": 48.92445,
+        "lon": 2.36016,
+        "heure": "09:30",
+        "mode": "transit",
+        "dureeMax": 60,
+        "corrMax": null,
+        "importance": "important"
+      }
+    ],
+    "adresseActuelle": {
+      "label": "Place de l’Hôtel de Ville 92600 Asnières-sur-Seine",
+      "lat": 48.91063,
+      "lon": 2.28527
+    }
+  }
+}
