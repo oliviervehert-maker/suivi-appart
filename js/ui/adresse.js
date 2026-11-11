@@ -8,7 +8,10 @@ export async function chercherAdresses(q, o = {}) {
   const p = new URLSearchParams({ q, limit: String(o.limit || 5) });
   if (o.autocomplete !== false) p.set('autocomplete', '1');
   if (o.type) p.set('type', o.type);
-  const r = await getJSONok(BAN + '?' + p.toString(), { delai: 8000 });
+  const r = await getJSONok(BAN + '?' + p.toString(), {
+    delai: 8000,
+    suivi: { libelle: o.autocomplete === false ? 'Position d’une adresse' : 'Recherche d’adresse', recu: (c) => (c ? { n: (c.features || []).length, unite: 'adresse' } : null) }
+  });
   return (r.features || []).map((f) => ({
     label: f.properties.label,
     contexte: f.properties.context || '',

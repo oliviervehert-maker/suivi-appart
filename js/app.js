@@ -13,6 +13,9 @@ import { rendreSuivi, rendreSources, ouvrirMail, copierMail, ouvrirPhotos, ouvri
 import { exporterDonnees, importerFichier, toutEffacer, donneesAPartager } from './ui/donnees.js';
 import { encoderLien, decoderLien, codeDansTexte } from './core/partage.js';
 import { ouvrirAccueil, clicAccueil } from './ui/accueil.js';
+import { observer } from './net.js';
+import { direct } from './direct.js';
+import { initDirect, ouvrir as ouvrirDirect, fermer as fermerDirect, estOuvert as directOuvert } from './ui/direct.js';
 
 const $ = (id) => document.getElementById(id);
 let ongletCourant = 'biens';
@@ -64,6 +67,7 @@ function majRun() {
 }
 function majProgres() {
   const p = progres(), el = $('enrline');
+  direct.file(p);
   const actif = p.actif && p.total > 0;
   el.classList.toggle('idle', !actif);
   if (actif) {
@@ -118,10 +122,15 @@ async function actualiserInterne() {
   if (S.run.enCours) return;
   if (!S.C.lieux.length) { allerA('criteres'); return; }
   S.run.enCours = true; S.run.erreur = null; S.run.texte = 'Recherche en cours…'; majRun();
+  direct.debutReleve({ lieux: S.C.lieux.map((l) => l.nom), destinations: S.C.destinations.filter((d) => d.lat != null).length });
   try {
-    const r = await rechercher(S.C, { progres: (p) => { S.run.texte = 'Recherche · ' + p.lieu + (p.page > 1 ? ' · page ' + p.page : '') + (p.annonces ? ' · ' + p.annonces + ' annonces' : ''); majRun(); } });
+    const r = await rechercher(S.C, {
+      progres: (p) => { S.run.texte = 'Recherche · ' + p.lieu + (p.page > 1 ? ' · page ' + p.page : '') + (p.annonces ? ' · ' + p.annonces + ' annonces' : ''); majRun(); },
+      lieuFini: (x) => direct.lieuFini(x)
+    });
     if (r.echecs && r.echecs >= S.C.lieux.length) throw new Error('reseau');
     const f = fusionner(S.biens, r.annonces, { premiere: !S.run.derniere && !S.biens.length, complet: r.complet, zonesActives: S.C.lieux.flatMap((l) => l.zoneIds) });
+    direct.resultatRecherche({ nouvelles: f.nouveaux.length, aVerifier: f.aVerifier.length });
     definirBiens(f.biens);
     await store.enregistrerBiens(f.biens);
     if (f.purges.length) await store.supprimerBiens(f.purges);
@@ -131,7 +140,7 @@ async function actualiserInterne() {
       S.run.texte = 'Vérification des biens suivis · ' + i + ' / ' + f.aVerifier.length; majRun();
       const b = bien(id); if (!b) continue;
       let v;
-      try { v = await verifierFiche(b.bid); } catch (e) { v = { dispo: 'inconnu' }; }
+      try { v = await verifierFiche(b.bid, [b.commune, b.quartier].filter(Boolean).join(' · ')); } catch (e) { v = { dispo: 'inconnu' }; }
       const m = appliquerVerif(b, v); remplacerBien(m); await store.enregistrerBiens([m]);
     }
     S.run.derniere = new Date().toISOString();
@@ -144,7 +153,17 @@ async function actualiserInterne() {
   }
   S.run.enCours = false; S.run.texte = '';
   toutRendre();
-  planifierEnr({ reessayer: true, delai: 50 });
+  if (S.run.erreur === 'reseau') {
+    direct.finRecherche({ echec: 'réseau indisponible' });
+    planifierEnr({ reessayer: true, delai: 50 });
+  } else {
+    /* La relève reste en cours tant que la file des arrêts et trajets n'est pas vide : la file est
+       planifiée tout de suite (sans minuteur) pour que l'état de la relève la voie. */
+    direct.finRecherche({});
+    clearTimeout(tPlan);
+    planifier({ biens: S.biens, C: S.C, majBien: majBiensEnrichis, majProgres, majRef, reessayer: true });
+    direct.file(progres());
+  }
   syncAlertes();
 }
 ui.toutRendre = toutRendre;
@@ -182,6 +201,9 @@ document.addEventListener('click', async (ev) => {
   if (d.v) { allerA(d.v); return; }
   if (d.goto) { allerA(d.goto); return; }
   if (t.id === 'refresh') { actualiser(); return; }
+  if (t.id === 'runopen') { ouvrirDirect(); return; }
+  if (t.id === 'direct-fermer') { fermerDirect(); return; }
+  if (t.id === 'direct-actualiser') { if (!S.C.lieux.length) fermerDirect(); actualiser(); return; }
   if (d.f) { mettreEnTete(null); S.reglages.filtre = d.f; sauverReglages(); rendreListe({ reinitialiser: true }); return; }
   if (t.id === 'more') { afficherPlus(); return; }
   if (d.keep) { const b = bien(d.keep); if (b) { await modifierBien(b.id, { cote: !b.cote }); majCarte(b.id); rendreEntete(toutEvaluer()); planifierEnr(); syncAlertes(); } return; }
@@ -240,7 +262,7 @@ document.addEventListener('change', async (ev) => {
   changeCrit(t);
 });
 document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape') { fermer('viewer'); fermer('sheet'); return; }
+  if (ev.key === 'Escape') { if (directOuvert()) { fermerDirect(); return; } fermer('viewer'); fermer('sheet'); return; }
   if (ev.key === 'Enter' && ev.target.dataset && ev.target.dataset.note !== undefined) { ev.target.blur(); return; }
   toucheCrit(ev);
 });
@@ -331,7 +353,7 @@ function cibleDansAdresse() {
 }
 async function ouvrirAnnonce(id) {
   if (!id) return;
-  $('onb').hidden = true; fermer('sheet'); fermer('viewer');
+  $('onb').hidden = true; fermer('sheet'); fermer('viewer'); fermerDirect();
   allerA('biens');
   if (S.C.lieux.length && navigator.onLine !== false) await actualiser();
   if (mettreEnTete(id)) { sauverReglages(); rendreListe({ reinitialiser: true }); window.scrollTo(0, 0); return; }
@@ -342,6 +364,13 @@ async function ouvrirAnnonce(id) {
 /* ---------- démarrage ---------- */
 async function demarrer() {
   const cible = cibleDansAdresse();
+  /* Relève en direct : toutes les requêtes sont observées dès le lancement (mémoire seulement). */
+  observer(direct.evenement);
+  initDirect(direct, {
+    lieux: () => S.C.lieux.map((l) => l.nom),
+    derniere: () => S.run.derniere,
+    pied: ALERTES_URL ? 'Les relèves affichées ici partent de ce téléphone.' : 'Tout part de ce téléphone\u00a0: aucun serveur entre l’app et ces services.'
+  });
   document.title = APP_NOM;
   $('app-nom').textContent = APP_NOM;
   try { await charger(); } catch (e) { S.memoireSeule = true; }

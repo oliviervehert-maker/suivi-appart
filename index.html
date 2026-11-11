@@ -35,7 +35,7 @@
 
 <main class="wrap">
   <div class="notice" id="notice" hidden></div>
-  <div class="runline" id="runline"><i></i><span id="runtext">&nbsp;</span><button class="btn" id="refresh" type="button">Actualiser</button></div>
+  <div class="runline" id="runline"><i></i><button class="runopen" id="runopen" type="button" aria-haspopup="dialog" aria-controls="direct"><span id="runtext">&nbsp;</span><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5l4.5 4.5L6 12.5"/></svg></button><button class="btn" id="refresh" type="button">Actualiser</button></div>
   <div class="enrline idle" id="enrline" aria-live="polite"><span class="bar"><i id="enrbar"></i></span><span id="enrtext">&nbsp;</span></div>
 
   <!-- BIENS -->
@@ -126,6 +126,81 @@
   <div class="bar"><span id="viewer-t"></span><button class="btn" type="button" data-close="viewer">Fermer</button></div>
   <div class="vstrip" id="vstrip"></div>
   <div class="bar"><span>Glisser pour voir les autres photos</span><span id="viewer-link"></span></div>
+</div>
+
+<div class="direct" id="direct" hidden role="dialog" aria-modal="true" aria-labelledby="direct-t">
+  <header class="d-top">
+    <div class="d-wrap">
+      <div class="d-brand">
+        <h2 id="direct-t">Relève en direct</h2>
+        <p aria-live="polite"><span id="direct-etat-txt">Au repos</span><span id="direct-etat-sec" aria-hidden="true"></span></p>
+      </div>
+      <button type="button" class="d-fermer" id="direct-fermer">Fermer</button>
+    </div>
+  </header>
+  <div class="d-wrap d-corps">
+    <section class="d-plan" aria-label="Plan des services interrogés">
+      <div class="d-termes haut">
+        <div class="d-term" data-hote="bienici" style="--c:var(--l-bienici)">
+          <div class="d-t-nom"><span>Bien’ici</span></div>
+          <div class="d-t-role">annonces</div>
+          <div class="d-t-etat" data-etat="attente"><i></i><span>en attente</span></div>
+          <div class="d-t-mes">0&nbsp;envoi · —</div>
+          <div class="d-t-recu">—</div>
+        </div>
+        <div class="d-term d" data-hote="transitous" style="--c:var(--l-transitous)">
+          <div class="d-t-nom"><span>Transitous</span></div>
+          <div class="d-t-role">trajets et arrêts</div>
+          <div class="d-t-etat" data-etat="attente"><i></i><span>en attente</span></div>
+          <div class="d-t-mes">0&nbsp;envoi · —</div>
+          <div class="d-t-recu">—</div>
+        </div>
+      </div>
+      <svg id="direct-plan" role="img" aria-label="Lignes entre ce téléphone et les quatre services" viewBox="0 0 306 150"></svg>
+      <div class="d-termes bas">
+        <div class="d-term" data-hote="adresse" style="--c:var(--l-adresse)">
+          <div class="d-t-nom"><span>Adresse</span></div>
+          <div class="d-t-role">adresses saisies</div>
+          <div class="d-t-etat" data-etat="attente"><i></i><span>en attente</span></div>
+          <div class="d-t-mes">0&nbsp;envoi · —</div>
+          <div class="d-t-recu">—</div>
+        </div>
+        <div class="d-term d" data-hote="idfm" style="--c:var(--l-idfm)">
+          <div class="d-t-nom"><span>Île-de-France Mobilités</span></div>
+          <div class="d-t-role">arrêts et lignes</div>
+          <div class="d-t-etat" data-etat="attente"><i></i><span>en attente</span></div>
+          <div class="d-t-mes">0&nbsp;envoi · —</div>
+          <div class="d-t-recu">—</div>
+        </div>
+      </div>
+    </section>
+    <div class="d-actions"><button type="button" class="d-btn" id="direct-actualiser">Actualiser</button></div>
+    <p class="d-bilan" id="direct-bilan">Bilan à la fin de la relève.</p>
+    <section aria-labelledby="direct-h-etapes">
+      <h3 id="direct-h-etapes">Étapes de la relève</h3>
+      <div class="d-etapes" id="direct-etapes"></div>
+    </section>
+    <section aria-labelledby="direct-h-compteurs">
+      <h3 id="direct-h-compteurs">Compteurs</h3>
+      <div class="kpis">
+        <div class="kpi"><b id="direct-k-lues">–</b><span>annonces lues</span></div>
+        <div class="kpi hot"><b id="direct-k-nouv">–</b><span>nouvelles</span></div>
+        <div class="kpi"><b id="direct-k-traj">–</b><span>trajets calculés</span></div>
+        <div class="kpi"><b id="direct-k-env">–</b><span>requêtes envoyées</span></div>
+      </div>
+    </section>
+    <section aria-labelledby="direct-h-journal">
+      <h3 id="direct-h-journal">Journal</h3>
+      <ol class="d-journal" id="direct-journal">
+        <li class="vide"><i></i><div class="d-j-c"><div class="d-j-a"><b></b><span>Aucun événement</span></div><div class="d-j-b"></div></div><span class="d-j-ms"></span></li>
+        <li class="vide"><i></i><div class="d-j-c"><div class="d-j-a"><b></b><span></span></div><div class="d-j-b"></div></div><span class="d-j-ms"></span></li>
+        <li class="vide"><i></i><div class="d-j-c"><div class="d-j-a"><b></b><span></span></div><div class="d-j-b"></div></div><span class="d-j-ms"></span></li>
+        <li class="vide"><i></i><div class="d-j-c"><div class="d-j-a"><b></b><span></span></div><div class="d-j-b"></div></div><span class="d-j-ms"></span></li>
+        <li class="vide"><i></i><div class="d-j-c"><div class="d-j-a"><b></b><span></span></div><div class="d-j-b"></div></div><span class="d-j-ms"></span></li>
+      </ol>
+    </section>
+    <p class="d-pied" id="direct-pied">Tout part de ce téléphone&nbsp;: aucun serveur entre l’app et ces services.</p>
+  </div>
 </div>
 
 <div class="onb" id="onb" hidden role="dialog" aria-modal="true" aria-labelledby="onb-t"></div>

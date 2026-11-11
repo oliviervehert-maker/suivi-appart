@@ -219,6 +219,144 @@ t('Transitous : arrêts groupés, hors rayon exclus', at.groupes.length === 1 &&
 t('Transitous : lignes depuis les passages', lignesDepuisPassages({ stopTimes: [{ mode: 'SUBWAY', routeShortName: 'A' }, { mode: 'SUBWAY', routeShortName: 'D' }, { mode: 'BUS', routeShortName: 'C9' }] }).join(',') === 'MA,MD,C9');
 t('Transitous : au plus 5 arrêts interrogés', arretsAInterroger(Array.from({ length: 9 }, (_, i) => ({ mode: i % 2 ? 'bus' : 'metro', stopId: 'x' + i }))).length <= 5);
 
+groupe('Relève en direct : événements du réseau');
+{
+  const NET = await import('../js/net.js');
+  const fetchAvant = globalThis.fetch;
+  const appelsFetch = [];
+  let mode = 'ok';
+  globalThis.fetch = async (u) => {
+    appelsFetch.push(Date.now());
+    await new Promise((r) => setTimeout(r, 30));
+    if (mode === 'panne') throw new TypeError('Failed to fetch');
+    if (mode === '404') return new Response('{}', { status: 404 });
+    return new Response(JSON.stringify({ features: [{}, {}, {}] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    let recusSansObs = 0;
+    await NET.getJSONok('https://api-adresse.data.gouv.fr/search/?q=z', { suivi: { recu: () => { recusSansObs++; return null; } } });
+    t('réseau : sans observateur, aucun suivi construit (reçu jamais calculé)', recusSansObs === 0);
+    const ev = [];
+    const fin = NET.observer((e) => ev.push(e));
+    const appel = Date.now();
+    const p1 = NET.getJSONok('https://api-adresse.data.gouv.fr/search/?q=a', { suivi: { libelle: 'Essai', etape: { type: 'x' }, recu: (c) => ({ n: c.features.length, unite: 'adresse' }) } });
+    const p2 = NET.getJSON('https://api-adresse.data.gouv.fr/search/?q=b');
+    await Promise.all([p1, p2]);
+    const [e1, r1, e2, r2] = ev;
+    t('réseau : envoi puis réponse, même id', ev.length === 4 && e1.id === r1.id && e2.id === r2.id && e1.id !== e2.id, ev.map((e) => e.id));
+    t('réseau : envoi sans durée, réponse avec durée mesurée', e1.duree === undefined && typeof r1.duree === 'number' && r1.duree >= 25 && r1.duree < 2000, r1.duree);
+    t('réseau : format { t, id, hote, libelle, etape, recu }', e1.hote === 'adresse' && e1.domaine === 'api-adresse.data.gouv.fr' && e1.libelle === 'Essai' && e1.etape.type === 'x' && r1.recu.n === 3 && r1.recu.unite === 'adresse' && typeof e1.t === 'number', [e1, r1]);
+    t('réseau : envoi émis avant l’appel réel, pas à la mise en file', e1.t <= appelsFetch[appelsFetch.length - 2] && e2.t <= appelsFetch[appelsFetch.length - 1]);
+    t('réseau : départ réel après l’attente de cadence (250 ms)', e2.t - e1.t >= 240 && e2.t - appel >= 240, [e2.t - e1.t, e2.t - appel]);
+    t('réseau : sans option de suivi, libellé tiré du chemin', e2.libelle === 'Requête search' && r2.recu && r2.recu.texte === 'réponse 200' && !e2.etape, [e2.libelle, r2.recu]);
+    ev.length = 0;
+    mode = 'panne';
+    let leve = null;
+    try { await NET.getJSONok('https://api-adresse.data.gouv.fr/search/?q=c', { suivi: { libelle: 'Panne' } }); } catch (e) { leve = e; }
+    t('réseau : échec émis avec durée et texte, erreur toujours levée', leve && leve.code === 'hors_ligne' && ev.length === 2 && ev[1].echec === 'réseau indisponible' && typeof ev[1].duree === 'number' && !ev[1].recu, ev[1]);
+    ev.length = 0;
+    mode = '404';
+    await NET.getJSON('https://api-adresse.data.gouv.fr/search/?q=d');
+    t('réseau : réponse HTTP en erreur sans interprétation = échec « réponse 404 »', ev[1] && ev[1].echec === 'réponse 404', ev[1]);
+    ev.length = 0;
+    await NET.getJSON('https://api-adresse.data.gouv.fr/search/?q=e', { suivi: { recu: (c, s) => (s === 404 ? { texte: 'annonce retirée' } : null) } });
+    t('réseau : l’appelant interprète un statut (fiche retirée)', ev[1] && !ev[1].echec && ev[1].recu.texte === 'annonce retirée', ev[1]);
+    mode = 'ok';
+    ev.length = 0;
+    const finLeve = NET.observer(() => { throw new Error('observateur cassé'); });
+    let r5 = null;
+    try { r5 = await NET.getJSONok('https://api-adresse.data.gouv.fr/search/?q=f', { suivi: { recu: () => { throw new Error('reçu cassé'); } } }); } catch (e) { r5 = e; }
+    t('réseau : un observateur ou un reçu qui lève ne casse pas la requête', r5 && Array.isArray(r5.features) && ev.length === 2 && ev[1].recu && ev[1].recu.texte === 'réponse 200', [r5, ev[1]]);
+    finLeve(); fin();
+    ev.length = 0;
+    await NET.getJSONok('https://api-adresse.data.gouv.fr/search/?q=g');
+    t('réseau : désabonnement effectif', ev.length === 0);
+    const { HOTES_AUTORISES, SERVICES_HOTES } = await import('../js/config.js');
+    const DIR = await import('../js/direct.js');
+    t('services : chaque hôte autorisé appartient à l’une des quatre lignes', HOTES_AUTORISES.every((h) => DIR.SERVICES.indexOf(SERVICES_HOTES[h]) >= 0) && DIR.SERVICES.every((s) => HOTES_AUTORISES.some((h) => SERVICES_HOTES[h] === s)) && NET.serviceDe('res.bienici.com') === 'bienici' && NET.serviceDe('file.bienici.com') === 'bienici');
+    /* Bout à bout : le réseau alimente l'état de la relève. */
+    const D0 = DIR.creerDirect();
+    const fin2 = NET.observer(D0.evenement);
+    D0.debutReleve({ lieux: ['Lieu A'], destinations: 1 });
+    await NET.getJSONok('https://api-adresse.data.gouv.fr/search/?q=h', { suivi: { libelle: 'Lieu A, page 1', etape: { type: 'recherche', lieu: 0, page: 1 }, recu: () => ({ n: 7, unite: 'annonce', total: 7, pages: 1 }) } });
+    fin2();
+    const E0 = D0.etat();
+    t('bout à bout : réponse réelle comptée dans la relève', E0.releve.lues === 7 && E0.releve.envois === 1 && E0.services.adresse.envois === 1 && E0.services.adresse.aRepondu && E0.vols.size === 0 && E0.journal[0].libelle === 'Lieu A, page 1', E0.releve);
+  } finally { globalThis.fetch = fetchAvant; }
+}
+
+groupe('Relève en direct : état');
+{
+  const DIR = await import('../js/direct.js');
+  let horloge = 1000000;
+  const D = DIR.creerDirect({ maintenant: () => horloge });
+  const notes = [];
+  D.abonner(() => { throw new Error('abonné cassé'); });
+  D.abonner((q) => notes.push(q));
+  const E = D.etat();
+  t('état : au repos, aucune relève, compteurs « – »', E.releve === null && DIR.compteurs(E).lues === '–' && DIR.titreEtat(E, horloge, null, null).txt === 'Au repos · aucune relève');
+  t('état : au repos, lieux des critères en attente', DIR.etapes(E, ['A', 'B']).filter((l) => l.genre === 'lieu').map((l) => l.bas).join() === 'en attente,en attente');
+  /* Requête hors relève (suggestion) : sur le plan et au journal, pas dans une relève. */
+  D.evenement({ t: horloge, id: 's1', hote: 'bienici', libelle: 'Suggestions de lieux' });
+  D.evenement({ t: horloge + 80, id: 's1', hote: 'bienici', libelle: 'Suggestions de lieux', duree: 80, recu: { n: 4, unite: 'proposition' } });
+  t('état : requête hors relève visible sur la ligne et au journal', E.services.bienici.envois === 1 && E.services.bienici.dernierMs === 80 && E.journal[0].detail === '4 propositions');
+  const PO2 = profilExemple();
+  D.debutReleve({ lieux: PO2.lieux.map((l) => l.nom), destinations: 2 });
+  const R = E.releve;
+  t('état : relève démarrée, compteurs par service remis à zéro', R.statut === 'cours' && R.lieux.length === 3 && E.services.bienici.envois === 0 && E.journal[0].libelle === 'Relève démarrée' && notes.indexOf('debut') >= 0);
+  horloge += 2000;
+  D.evenement({ t: horloge, id: 'b1', hote: 'bienici', libelle: PO2.lieux[0].nom + ', page 1', etape: { type: 'recherche', lieu: 0, page: 1 } });
+  t('état : page en cours sur la rangée du lieu, total encore inconnu', R.lieux[0].statut === 'cours' && DIR.etapes(E)[0].haut === 'page 1/–' && E.services.bienici.enVol === 1 && R.envois === 1);
+  /* Écran ouvert à cet instant : l'état exact est disponible (requête en vol, durée écoulée). */
+  t('état : ouverture en cours de route = requête en vol connue, état exact', E.vols.has('b1') && E.vols.get('b1').service === 'bienici' && DIR.titreEtat(E, horloge, null, null).txt === 'En cours' && DIR.titreEtat(E, horloge, null, null).sec === ' · 2 s' && DIR.etatService(E.services.bienici) === 'cours');
+  D.evenement({ t: horloge + 300, id: 'b1', hote: 'bienici', libelle: 'x', duree: 300, recu: { n: 100, unite: 'annonce', total: 130, pages: 2 }, etape: { type: 'recherche', lieu: 0, page: 1 } });
+  t('état : réponse = annonces lues, pages connues', R.lues === 100 && R.lieux[0].lues === 100 && DIR.etapes(E)[0].haut === 'page 1/2' && E.vols.size === 0 && E.services.bienici.enVol === 0 && DIR.etatService(E.services.bienici) === 'ok');
+  D.evenement({ t: horloge, id: 'b2', hote: 'bienici', libelle: 'p2', etape: { type: 'recherche', lieu: 0, page: 2 } });
+  D.evenement({ t: horloge, id: 'b2', hote: 'bienici', libelle: 'p2', duree: 200, recu: { n: 30, unite: 'annonce', total: 130, pages: 2 } });
+  D.lieuFini({ index: 0, echec: false, lus: 130, pages: 2 });
+  D.evenement({ t: horloge, id: 'b3', hote: 'bienici', libelle: 'l2', etape: { type: 'recherche', lieu: 1, page: 1 } });
+  D.evenement({ t: horloge, id: 'b3', hote: 'bienici', libelle: 'l2', duree: 20000, echec: 'délai dépassé' });
+  D.lieuFini({ index: 1, echec: true, lus: 0, pages: null });
+  t('état : lieu fini (ok) et lieu en échec', R.lieux[0].statut === 'ok' && R.lues === 130 && R.lieux[1].statut === 'erreur' && DIR.etapes(E)[1].bas === 'échec' && E.services.bienici.echec === 'délai dépassé' && DIR.etatService(E.services.bienici) === 'erreur');
+  D.evenement({ t: horloge, id: 's2', hote: 'adresse', libelle: 'Recherche d’adresse' });
+  t('état : requête hors relève pendant la relève non comptée dans les étapes', R.envois === 3 && E.services.adresse.envois === 1, R.envois);
+  D.evenement({ t: horloge, id: 's2', hote: 'adresse', libelle: 'Recherche d’adresse', duree: 50, recu: { n: 5, unite: 'adresse' } });
+  t('état : journal borné à 5 lignes, la plus récente en tête', E.journal.length === 5 && E.journal[0].libelle === 'Recherche d’adresse');
+  D.resultatRecherche({ nouvelles: 3, aVerifier: 1 });
+  t('état : vérification des suivis, total connu', DIR.etapes(E).find((l) => l.nom === 'Biens suivis revérifiés').n === '0/1' && DIR.compteurs(E).nouvelles === '3');
+  D.evenement({ t: horloge, id: 'f1', hote: 'bienici', libelle: 'Fiche suivie', etape: { type: 'fiche' } });
+  D.evenement({ t: horloge, id: 'f1', hote: 'bienici', libelle: 'Fiche suivie', duree: 90, recu: { texte: 'annonce en ligne' } });
+  t('état : fiche revérifiée comptée', R.suivis.fait === 1 && DIR.etapes(E).find((l) => l.nom === 'Biens suivis revérifiés').icone === 'ok');
+  D.file({ actif: false, arrets: { total: 0, faits: 0 }, trajets: { total: 0, faits: 0, calcules: 0 } });
+  t('état : file vue avant la fin de la recherche ignorée', R.statut === 'cours' && !R.fileVue);
+  D.finRecherche({});
+  t('état : recherche finie mais file pas encore vue = toujours en cours', R.statut === 'cours' && R.rechercheFinie && R.lieux[2].statut === 'non' && DIR.etapes(E)[2].bas === 'non interrogé');
+  t('état : trajets « – » tant que le total est inconnu', DIR.etapes(E).find((l) => l.nom === 'Trajets').n === '0/–');
+  D.file({ actif: true, arrets: { total: 2, faits: 0 }, trajets: { total: 4, faits: 0, calcules: 0 } });
+  D.evenement({ t: horloge, id: 'a1', hote: 'idfm', libelle: 'Arrêts ferrés', etape: { type: 'arrets' } });
+  D.evenement({ t: horloge, id: 'a1', hote: 'idfm', libelle: 'Arrêts ferrés', duree: 400, recu: { n: 6, unite: 'arrêt', n2: 9, unite2: 'ligne' } });
+  D.file({ actif: true, arrets: { total: 2, faits: 2 }, trajets: { total: 4, faits: 3, calcules: 2 } });
+  t('état : file active = relève en cours, étapes et compteurs à jour', R.statut === 'cours' && DIR.etapes(E).find((l) => l.nom === 'Arrêts et lignes').n === '2/2' && DIR.etapes(E).find((l) => l.nom === 'Trajets').icone === 'cours' && DIR.compteurs(E).trajets === '2' && E.journal[0].detail === '6 arrêts · 9 lignes');
+  horloge += 25000;
+  D.file({ actif: false, arrets: { total: 2, faits: 2 }, trajets: { total: 4, faits: 4, calcules: 3 } });
+  const b = DIR.bilan(E);
+  t('état : terminée seulement quand recherche finie ET file vide', R.statut === 'terminee' && R.fin === horloge && notes.indexOf('fin') >= 0);
+  t('état : bilan tiré des vrais résultats', b.fin && b.texte === 'Relève terminée en 27 s\n3 nouvelles annonces · 130 annonces lues · 1 lieu en échec', b.texte);
+  t('état : titre « Terminée en N s »', DIR.titreEtat(E, horloge, null, null).txt === 'Terminée en 27 s' && E.journal[0].libelle === 'Relève terminée' && E.journal[0].secondes === 27);
+  D.file({ actif: true, arrets: { total: 9, faits: 0 }, trajets: { total: 9, faits: 0, calcules: 0 } });
+  t('état : file relancée après la fin, relève terminée inchangée', R.statut === 'terminee' && R.trajets.total === 4);
+  D.debutReleve({ lieux: ['A'], destinations: 0 });
+  D.finRecherche({ echec: 'réseau indisponible' });
+  const b2 = DIR.bilan(E);
+  t('état : relève interrompue, sans fausse fin heureuse', E.releve.statut === 'interrompue' && b2.err && /^Relève interrompue : réseau indisponible/.test(b2.texte) && DIR.titreEtat(E, horloge, null, null).txt === 'Interrompue : réseau indisponible', b2.texte);
+  t('textes : pluriels et espaces insécables', DIR.quantite(1, 'envoi') === '1 envoi' && DIR.quantite(2, 'lieu') === '2 lieux' && DIR.quantite(12, 'min') === '12 min' && DIR.enMs(1234) === '1 234 ms');
+  t('état : module sans document ni stockage', !/document\.|localStorage|indexedDB|store\.js/.test(readFileSync(join(APP, 'js', 'direct.js'), 'utf8')));
+  const srcNet = readFileSync(join(APP, 'js', 'net.js'), 'utf8');
+  t('réseau : net.js reste sans document ni stockage', !/document\.|localStorage|indexedDB|store\.js/.test(srcNet));
+  const srcUI = readFileSync(join(APP, 'js', 'ui', 'direct.js'), 'utf8');
+  t('écran : aucun stockage, aucune requête, animation seulement écran ouvert', !/localStorage|indexedDB|store\.js|fetch\(|getJSON/.test(srcUI) && /if \(!ouvert \|\| raf \|\| !rames\.size\) return;/.test(srcUI) && /prefers-reduced-motion: reduce/.test(srcUI));
+}
+
 groupe('Cohérence du code');
 function fichiers(dir, ext) {
   const out = [];

@@ -1,6 +1,6 @@
 /* Réseau : un seul point de sortie, liste blanche d'hôtes, cadence par hôte, délai maximal.
    Sans document ni stockage : utilisable aussi par les tests Node. */
-import { HOTES_AUTORISES, INTERVALLES_MS, REFERER_ORIGINE, APP_NOM, APP_VERSION, CONTACT_APP, ALERTES_URL } from './config.js';
+import { HOTES_AUTORISES, INTERVALLES_MS, REFERER_ORIGINE, APP_NOM, APP_VERSION, CONTACT_APP, ALERTES_URL, SERVICES_HOTES } from './config.js';
 
 const NAVIGATEUR = typeof window !== 'undefined' && typeof document !== 'undefined';
 
@@ -10,6 +10,54 @@ export function hoteAlertes(url = ALERTES_URL) {
   try { const u = new URL(url); return u.protocol === 'https:' ? u.hostname : ''; } catch (e) { return ''; }
 }
 const HOTES = HOTES_AUTORISES.concat(hoteAlertes() ? [hoteAlertes()] : []);
+
+/* ---------- Observation des requêtes (écran « Relève en direct ») ----------
+   Chaque requête émet un événement au DÉPART RÉEL (après l'attente de cadence) puis un autre à la
+   réponse ou à l'échec, avec la durée mesurée ; même id. Aucun observateur : rien n'est construit.
+   Un observateur qui lève ne casse jamais une requête. */
+const observateurs = new Set();
+let numeroRequete = 0;
+export function observer(fn) {
+  if (typeof fn !== 'function') return () => {};
+  observateurs.add(fn);
+  return () => { observateurs.delete(fn); };
+}
+function emettre(e) {
+  for (const fn of [...observateurs]) { try { fn(e); } catch (x) { /* l'observateur est ignoré */ } }
+}
+function chrono() { return typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now(); }
+export function serviceDe(hote) { return SERVICES_HOTES[hote] || (hote && hote === hoteAlertes() ? 'alertes' : String(hote || '')); }
+function libelleParDefaut(u) {
+  const morceaux = u.pathname.split('/').filter(Boolean);
+  let fin = morceaux.length ? morceaux[morceaux.length - 1] : u.hostname;
+  try { fin = decodeURIComponent(fin); } catch (e) { /* tel quel */ }
+  return 'Requête ' + fin;
+}
+/* Rend null sans observateur ; sinon un suivi dont fin(statut, corps, erreur) émet la réponse. */
+function suivre(u, o) {
+  if (!observateurs.size) return null;
+  const s = (o && o.suivi) || {};
+  const base = { id: 'q' + (++numeroRequete), hote: serviceDe(u.hostname), domaine: u.hostname, libelle: s.libelle || libelleParDefaut(u) };
+  if (s.etape) base.etape = s.etape;
+  emettre(Object.assign({ t: Date.now() }, base));
+  const t0 = chrono();
+  return {
+    fin(statut, corps, erreur) {
+      const e = Object.assign({ t: Date.now(), duree: Math.max(0, Math.round(chrono() - t0)) }, base);
+      if (erreur) e.echec = String(erreur.message || 'échec').toLowerCase();
+      else {
+        let recu = null;
+        if (typeof s.recu === 'function') { try { recu = s.recu(corps, statut) || null; } catch (x) { recu = null; } }
+        const ok = statut >= 200 && statut < 300;
+        if (recu) e.recu = recu;
+        else if (!ok) e.echec = 'réponse ' + statut;
+        else if (corps == null && s.json !== false) e.echec = 'réponse illisible';
+        else e.recu = { texte: 'réponse ' + statut };
+      }
+      emettre(e);
+    }
+  };
+}
 
 const files = new Map();   /* hôte -> promesse de la dernière requête planifiée */
 const derniers = new Map(); /* hôte -> horodatage du dernier départ */
@@ -47,6 +95,7 @@ export function getJSON(url, o = {}) {
   return planifier(u.hostname, async () => {
     const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const t = setTimeout(() => { if (ctl) ctl.abort(); }, o.delai || 20000);
+    const suivi = suivre(u, o);
     try {
       const headers = { Accept: 'application/json' };
       if (!NAVIGATEUR) headers['User-Agent'] = APP_NOM.replace(/\s+/g, '') + '/' + APP_VERSION + ' (tests' + (CONTACT_APP ? '; ' + CONTACT_APP : '') + ')';
@@ -57,10 +106,12 @@ export function getJSON(url, o = {}) {
       });
       let corps = null;
       if (rep.ok) { try { corps = await rep.json(); } catch (e) { corps = null; } }
+      if (suivi) suivi.fin(rep.status, corps, null);
       return { statut: rep.status, corps };
     } catch (e) {
-      if (e && e.name === 'AbortError') throw new ErreurReseau('Délai dépassé', 'delai');
-      throw new ErreurReseau('Réseau indisponible', 'hors_ligne');
+      const err = e && e.name === 'AbortError' ? new ErreurReseau('Délai dépassé', 'delai') : new ErreurReseau('Réseau indisponible', 'hors_ligne');
+      if (suivi) suivi.fin(0, null, err);
+      throw err;
     } finally { clearTimeout(t); }
   });
 }
@@ -82,16 +133,19 @@ export function envoyerJSON(url, methode, corpsEnvoye, o = {}) {
   return planifier(u.hostname, async () => {
     const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const t = setTimeout(() => { if (ctl) ctl.abort(); }, o.delai || 20000);
+    const suivi = suivre(u, o);
     try {
       const init = { method: methode, signal: ctl ? ctl.signal : undefined, credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer', headers: { Accept: 'application/json' } };
       if (corpsEnvoye !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(corpsEnvoye); }
       const rep = await fetch(u.toString(), init);
       let corps = null;
       try { corps = await rep.json(); } catch (e) { corps = null; }
+      if (suivi) suivi.fin(rep.status, corps, null);
       return { statut: rep.status, corps, reessayerDans: Number(rep.headers.get('Retry-After')) || null };
     } catch (e) {
-      if (e && e.name === 'AbortError') throw new ErreurReseau('Délai dépassé', 'delai');
-      throw new ErreurReseau('Réseau indisponible', 'hors_ligne');
+      const err = e && e.name === 'AbortError' ? new ErreurReseau('Délai dépassé', 'delai') : new ErreurReseau('Réseau indisponible', 'hors_ligne');
+      if (suivi) suivi.fin(0, null, err);
+      throw err;
     } finally { clearTimeout(t); }
   });
 }

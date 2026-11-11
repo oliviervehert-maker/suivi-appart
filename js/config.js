@@ -1,7 +1,7 @@
 /* Nom de l'application : une seule constante (avec manifest.webmanifest et <title>). */
 export const APP_NOM = 'Suivi appart';
 /* Doit rester égal à VERSION dans sw.js. */
-export const APP_VERSION = '1.2.0';
+export const APP_VERSION = '1.3.0';
 
 /* Serveur d'alertes par notification (facultatif, voir serveur/LISEZMOI.md), sans barre finale.
    Chaîne vide : la fonction est entièrement masquée et aucun code d'alerte ne s'exécute.
@@ -13,6 +13,12 @@ export const HOTES_AUTORISES = [
   'www.bienici.com', 'res.bienici.com', 'file.bienici.com',
   'api.transitous.org', 'api-adresse.data.gouv.fr', 'data.iledefrance-mobilites.fr'
 ];
+
+/* Service de chaque hôte (écran « Relève en direct » : une ligne par service). */
+export const SERVICES_HOTES = {
+  'www.bienici.com': 'bienici', 'res.bienici.com': 'bienici', 'file.bienici.com': 'bienici',
+  'api.transitous.org': 'transitous', 'api-adresse.data.gouv.fr': 'adresse', 'data.iledefrance-mobilites.fr': 'idfm'
+};
 
 /* Délai minimal entre deux requêtes vers un même hôte (politesse envers les services publics). */
 export const INTERVALLES_MS = {

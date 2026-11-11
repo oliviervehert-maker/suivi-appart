@@ -20,6 +20,8 @@ let actif = { a: false, t: false };
 let reveil = null;
 let ctx = null;
 let total = 0, faits = 0;
+/* Détail par file pour l'écran « Relève en direct » : tâches d'arrêts, tâches de trajets, trajets calculés. */
+let totA = 0, faitsA = 0, totT = 0, faitsT = 0, calcT = 0;
 
 function dansIDF(lat, lon) { return lat > 48.11 && lat < 49.25 && lon > 1.44 && lon < 3.56; }
 function idfPour(p) { return p.dept || p.cp ? estIDF(p.dept, p.cp) : dansIDF(p.lat, p.lon); }
@@ -35,7 +37,7 @@ export async function chargerCaches() {
   store.cachePurger(now - CACHE_ARRETS_JOURS * JOUR);
 }
 
-export function viderMemoire() { arretsMem.clear(); trajetsMem.clear(); fileArrets = []; fileTrajets = []; total = faits = 0; }
+export function viderMemoire() { arretsMem.clear(); trajetsMem.clear(); fileArrets = []; fileTrajets = []; total = faits = 0; totA = faitsA = totT = faitsT = calcT = 0; }
 
 /* État des enrichissements d'une annonce, pour le score et l'affichage. undefined = en attente. */
 export function enrPour(b, C) {
@@ -58,7 +60,29 @@ export function refPour(C) {
 }
 export function arretsPour(b) { return b.lat == null ? null : arretsMem.get(cleArrets(b.lat, b.lon)); }
 
-export function progres() { return { total, faits, actif: actif.a || actif.t || fileArrets.length + fileTrajets.length > 0 }; }
+export function progres() {
+  return {
+    total, faits, actif: actif.a || actif.t || fileArrets.length + fileTrajets.length > 0,
+    arrets: { total: totA, faits: faitsA }, trajets: { total: totT, faits: faitsT, calcules: calcT }
+  };
+}
+
+/* Libellé d'une origine pour le journal de la relève (en mémoire seulement). */
+function libOrigine(o) { return o.id === '__actuelle' ? 'Adresse actuelle' : ([o.commune, o.quartier].filter(Boolean).join(' · ') || 'Annonce'); }
+const suiviIDFM = (c) => {
+  if (!c) return null;
+  const r = c.results || [];
+  return { n: new Set(r.map((x) => x.stop_name)).size, unite: 'arrêt', n2: new Set(r.map((x) => x.shortname).filter(Boolean)).size, unite2: 'ligne' };
+};
+function suiviPlan(mode) {
+  return (c) => {
+    if (!c) return null;
+    const o = optionsDepuisPlan(c, mode);
+    const r = { n: o.length, unite: 'itinéraire' };
+    if (o.length) { r.n2 = Math.min(...o.map((x) => x.min)); r.unite2 = 'min'; }
+    return r;
+  };
+}
 
 /**
  * Recalcule la file. ctx = { biens, C, majBien(ids), majProgres(), majRef() }
@@ -82,7 +106,7 @@ export function planifier(c) {
 
   for (const o of origines) {
     const ka = cleArrets(o.lat, o.lon);
-    if (!arretsMem.has(ka) && !vuA.has(ka) && !enCours.has(ka)) { vuA.add(ka); fa.push({ k: ka, lat: o.lat, lon: o.lon, idf: idfPour(o), ids: [o.id] }); }
+    if (!arretsMem.has(ka) && !vuA.has(ka) && !enCours.has(ka)) { vuA.add(ka); fa.push({ k: ka, lat: o.lat, lon: o.lon, idf: idfPour(o), ids: [o.id], lib: libOrigine(o) }); }
     else if (vuA.has(ka)) { const t = fa.find((x) => x.k === ka); if (t) t.ids.push(o.id); }
     for (const d of C.destinations) {
       if (d.lat == null) continue;
@@ -90,19 +114,21 @@ export function planifier(c) {
       const v = trajetsMem.get(kt);
       if ((v && v.etat === 'ok') || vuT.has(kt) || enCours.has(kt)) continue;
       vuT.add(kt);
-      ft.push({ k: kt, ka, de: { lat: o.lat, lon: o.lon }, dest: d, id: o.id, ref: !!o.ref });
+      ft.push({ k: kt, ka, de: { lat: o.lat, lon: o.lon }, dest: d, id: o.id, ref: o.id === '__actuelle', lib: libOrigine(o) });
     }
   }
   fileArrets = fa; fileTrajets = ft;
   total = fa.length + ft.length; faits = 0;
+  totA = fa.length; totT = ft.length; faitsA = faitsT = calcT = 0;
   c.majProgres && c.majProgres();
   if (reveil) { reveil(); reveil = null; }
   if (!actif.a) boucleArrets();
   if (!actif.t) boucleTrajets();
 }
 
-function signaler(ids, ref) {
+function signaler(ids, ref, genre) {
   faits++;
+  if (genre === 'a') faitsA++; else if (genre === 't') faitsT++;
   if (!ctx) return;
   if (ids && ids.length) ctx.majBien && ctx.majBien(ids.filter((i) => i !== '__actuelle'));
   if (ref || (ids && ids.indexOf('__actuelle') >= 0)) ctx.majRef && ctx.majRef();
@@ -114,19 +140,23 @@ async function boucleArrets() {
   try {
     while (fileArrets.length) {
       const t = fileArrets.shift();
-      if (arretsMem.has(t.k)) { signaler(t.ids); continue; }
+      if (arretsMem.has(t.k)) { signaler(t.ids, false, 'a'); continue; }
       enCours.add(t.k);
       let v = null, aCacher = false;
       try {
         if (t.idf) {
           const [u1, u2] = urlsArretsIDFM(t.lat, t.lon);
-          const r1 = await getJSONok(u1), r2 = await getJSONok(u2);
+          const r1 = await getJSONok(u1, { suivi: { libelle: 'Arrêts ferrés · ' + t.lib, etape: { type: 'arrets' }, recu: suiviIDFM } });
+          const r2 = await getJSONok(u2, { suivi: { libelle: 'Arrêts de bus · ' + t.lib, etape: { type: 'arrets' }, recu: suiviIDFM } });
           v = arretsDepuisIDFM(t.lat, t.lon, [r1, r2]); aCacher = true;
         } else {
-          const r = await getJSONok(urlArretsTransitous(t.lat, t.lon));
+          const r = await getJSONok(urlArretsTransitous(t.lat, t.lon), { suivi: { libelle: 'Arrêts · ' + t.lib, etape: { type: 'arrets' }, recu: (c) => (Array.isArray(c) ? { n: c.length, unite: 'arrêt' } : null) } });
           v = arretsDepuisTransitous(t.lat, t.lon, r);
           for (const g of arretsAInterroger(v.groupes)) {
-            try { g.lignes = lignesDepuisPassages(await getJSONok(urlPassages(g.stopId))); g.lignesLues = true; } catch (e) { g.lignesLues = false; }
+            try {
+              g.lignes = lignesDepuisPassages(await getJSONok(urlPassages(g.stopId), { suivi: { libelle: 'Lignes · ' + g.nom, etape: { type: 'arrets' }, recu: (c) => (c ? { n: lignesDepuisPassages(c).length, unite: 'ligne' } : null) } }));
+              g.lignesLues = true;
+            } catch (e) { g.lignesLues = false; }
           }
           aCacher = true;
         }
@@ -135,7 +165,7 @@ async function boucleArrets() {
       arretsMem.set(t.k, v);
       if (aCacher && v) store.cacheEcrire(t.k, v);
       if (reveil) { reveil(); reveil = null; }
-      signaler(t.ids);
+      signaler(t.ids, false, 'a');
     }
   } finally { actif.a = false; if (reveil) { reveil(); reveil = null; } ctx && ctx.majProgres && ctx.majProgres(); }
 }
@@ -153,27 +183,28 @@ async function boucleTrajets() {
       }
       const t = fileTrajets.splice(i, 1)[0];
       const v0 = trajetsMem.get(t.k);
-      if (v0 && v0.etat === 'ok') { signaler([t.id], t.ref); continue; }
+      if (v0 && v0.etat === 'ok') { signaler([t.id], t.ref, 't'); continue; }
       enCours.add(t.k);
       let v;
       try {
-        const rep = await getJSONok(urlTrajet({ de: t.de, vers: t.dest, heure: t.dest.heure, mode: t.dest.mode }), { delai: 30000 });
+        const rep = await getJSONok(urlTrajet({ de: t.de, vers: t.dest, heure: t.dest.heure, mode: t.dest.mode }), { delai: 30000, suivi: { libelle: t.lib + ' → ' + t.dest.nom, etape: { type: 'trajets' }, recu: suiviPlan(t.dest.mode) } });
         let opts = optionsDepuisPlan(rep, t.dest.mode);
         if (t.dest.mode === 'transit') {
           const gare = gareLaPlusProche(arretsMem.get(t.ka));
           if (varianteGareUtile(opts, gare)) {
             try {
-              const rep2 = await getJSONok(urlTrajet({ de: { lat: gare.lat, lon: gare.lon }, vers: t.dest, heure: t.dest.heure, mode: 'transit' }), { delai: 30000 });
+              const rep2 = await getJSONok(urlTrajet({ de: { lat: gare.lat, lon: gare.lon }, vers: t.dest, heure: t.dest.heure, mode: 'transit' }), { delai: 30000, suivi: { libelle: t.lib + ' → ' + t.dest.nom + ' depuis ' + gare.nom, etape: { type: 'trajets' }, recu: suiviPlan('transit') } });
               opts = opts.concat(optionsViaGare(rep2, gare));
             } catch (e) { /* la variante est facultative */ }
           }
         }
         v = { etat: 'ok', opts };
+        calcT++;
         store.cacheEcrire(t.k, v);
       } catch (e) { v = { etat: 'echec' }; }
       enCours.delete(t.k);
       trajetsMem.set(t.k, v);
-      signaler([t.id], t.ref);
+      signaler([t.id], t.ref, 't');
     }
   } finally { actif.t = false; ctx && ctx.majProgres && ctx.majProgres(); }
 }
