@@ -253,7 +253,7 @@ groupe('Relève en direct : événements du réseau');
     mode = 'panne';
     let leve = null;
     try { await NET.getJSONok('https://api-adresse.data.gouv.fr/search/?q=c', { suivi: { libelle: 'Panne' } }); } catch (e) { leve = e; }
-    t('réseau : échec émis avec durée et texte, erreur toujours levée', leve && leve.code === 'hors_ligne' && ev.length === 2 && ev[1].echec === 'réseau indisponible' && typeof ev[1].duree === 'number' && !ev[1].recu, ev[1]);
+    t('réseau : échec émis avec durée et texte, erreur toujours levée', leve && leve.code === 'hors_ligne' && ev.length === 2 && ev[1].echec === 'service injoignable' && typeof ev[1].duree === 'number' && !ev[1].recu, ev[1]);
     ev.length = 0;
     mode = '404';
     await NET.getJSON('https://api-adresse.data.gouv.fr/search/?q=d');
@@ -355,6 +355,95 @@ groupe('Relève en direct : état');
   t('réseau : net.js reste sans document ni stockage', !/document\.|localStorage|indexedDB|store\.js/.test(srcNet));
   const srcUI = readFileSync(join(APP, 'js', 'ui', 'direct.js'), 'utf8');
   t('écran : aucun stockage, aucune requête, animation seulement écran ouvert', !/localStorage|indexedDB|store\.js|fetch\(|getJSON/.test(srcUI) && /if \(!ouvert \|\| raf \|\| !rames\.size\) return;/.test(srcUI) && /prefers-reduced-motion: reduce/.test(srcUI));
+}
+
+groupe('Mise à jour de l’appli (1.3.1)');
+{
+  const { doitRecharger, RECHARGE_FENETRE_MS } = await import('../js/core/util.js');
+  const base = { masquee: false, depuisVisibleMs: 5000, importEnCours: false, saisieEnCours: false, releveEnCours: false };
+  t('recharge : page masquée = tout de suite', doitRecharger(Object.assign({}, base, { masquee: true, depuisVisibleMs: 999999 })) === true);
+  t('recharge : chargée ou revenue depuis moins de 20 s = tout de suite', RECHARGE_FENETRE_MS === 20000 && doitRecharger(base) === true && doitRecharger(Object.assign({}, base, { depuisVisibleMs: 19999 })) === true);
+  t('recharge : visible depuis 20 s ou plus = attendre', doitRecharger(Object.assign({}, base, { depuisVisibleMs: 20000 })) === false && doitRecharger(Object.assign({}, base, { depuisVisibleMs: 600000 })) === false);
+  t('recharge : jamais pendant un import, une saisie ou une relève (même masquée)', ['importEnCours', 'saisieEnCours', 'releveEnCours'].every((k) => doitRecharger(Object.assign({}, base, { [k]: true })) === false && doitRecharger(Object.assign({}, base, { masquee: true, [k]: true })) === false));
+  t('recharge : durée inconnue = attendre', doitRecharger({}) === false && doitRecharger({ depuisVisibleMs: NaN }) === false && doitRecharger({ depuisVisibleMs: -5 }) === false);
+  const srcApp = readFileSync(join(APP, 'js', 'app.js'), 'utf8');
+  t('recharge : recherche de mise à jour au retour (visible), au plus toutes les 10 min, erreurs avalées', /visibleDepuis = Date\.now\(\);\s*verifierMiseAJour\(\);/.test(srcApp) && /VERIF_MAJ_MS = 10 \* 60 \* 1000/.test(srcApp) && /enregistrement\.update\(\)\.catch\(\(\) => \{\}\)/.test(srcApp));
+  t('recharge : rechargement dû pris quand la page passe à l’état masqué', /if \(rechargementDu && conditionsRecharge\(true\)\) location\.reload\(\);/.test(srcApp) && /rechargementDu = true;/.test(srcApp));
+}
+
+groupe('Écran « Relève en direct » : bouton et test de liaison (1.3.1)');
+{
+  const html = readFileSync(join(APP, 'index.html'), 'utf8');
+  const ligne = (html.match(/<div class="runline" id="runline">[\s\S]*?<\/div>/) || [''])[0];
+  t('ligne d’état : pastille, texte non cliquable, bouton « En direct », Actualiser', /^<div class="runline" id="runline"><i><\/i><span id="runtext">&nbsp;<\/span><button class="btn runopen" id="runopen" type="button" aria-haspopup="dialog" aria-controls="direct">En direct<\/button><button class="btn" id="refresh" type="button">Actualiser<\/button><\/div>$/.test(ligne), ligne);
+  const css = readFileSync(join(APP, 'app.css'), 'utf8');
+  t('ligne d’état : plus de chevron, boutons de hauteur fixe, « En direct » en couleur d’accent', !/\.chev\b/.test(css) && !/class="chev"/.test(html) && /\.runline \.btn\{[^}]*height:var\(--tap\)/.test(css) && /\.runline \.runopen\{color:var\(--accent\)\}/.test(css));
+  t('écran : le focus revient sur « En direct » à la fermeture', /focusRetour = \$\('runopen'\)/.test(readFileSync(join(APP, 'js', 'ui', 'direct.js'), 'utf8')));
+  const srcApp = readFileSync(join(APP, 'js', 'app.js'), 'utf8');
+  t('test de liaison : lancé seulement à l’ouverture de l’écran', (srcApp.match(/lancerTestLiaison\(\)/g) || []).length === 2 && /if \(t\.id === 'runopen'\) \{ ouvrirDirect\(\); if \(directOuvert\(\)\) lancerTestLiaison\(\); return; \}/.test(srcApp));
+
+  const L = await import('../js/liaison.js');
+  const T0 = 5000000, M10 = 10 * 60 * 1000;
+  t('planification : rien d’envoyé avant, quatre services', L.servicesATester({ maintenant: T0 }).join() === 'bienici,adresse,idfm,transitous');
+  t('planification : aucun test pendant une relève ni hors ligne', L.servicesATester({ maintenant: T0, releveEnCours: true }).length === 0 && L.servicesATester({ maintenant: T0, enLigne: false }).length === 0);
+  t('planification : au plus un test par service toutes les 10 min', L.servicesATester({ maintenant: T0, derniersTests: { bienici: T0 - M10 + 1, adresse: T0 - M10 } }).join() === 'adresse,idfm,transitous');
+  t('planification : un service qui a répondu dans les 10 min n’est pas retesté', L.servicesATester({ maintenant: T0, dernieresReponses: { idfm: T0 - 1000, transitous: T0 - M10 - 1 } }).join() === 'bienici,adresse,transitous');
+  const U = L.urlsLiaison();
+  const u = Object.fromEntries(Object.entries(U).map(([k, v]) => [k, new URL(v)]));
+  const { HOTES_AUTORISES, SERVICES_HOTES } = await import('../js/config.js');
+  t('URL de liaison : quatre services, hôtes autorisés, https', Object.keys(U).sort().join() === 'adresse,bienici,idfm,transitous' && Object.entries(u).every(([k, x]) => x.protocol === 'https:' && HOTES_AUTORISES.indexOf(x.hostname) >= 0 && SERVICES_HOTES[x.hostname] === k), U);
+  t('URL de liaison : Bien’ici = suggestions « Paris »', u.bienici.hostname === 'res.bienici.com' && u.bienici.pathname === '/suggest.json' && u.bienici.searchParams.get('q') === 'Paris', U.bienici);
+  t('URL de liaison : Adresse = 1 résultat', u.adresse.pathname === '/search/' && u.adresse.searchParams.get('q') === 'Paris' && u.adresse.searchParams.get('limit') === '1', U.adresse);
+  t('URL de liaison : IDFM = jeu des arrêts, 1 enregistrement', U.idfm.indexOf('/datasets/arrets-lignes/records?') > 0 && u.idfm.searchParams.get('limit') === '1', U.idfm);
+  t('URL de liaison : Transitous = arrêts sur un point fixe, jamais un itinéraire', u.transitous.pathname === '/api/v1/map/stops' && /^48\.85\d+,2\.35\d+$/.test(u.transitous.searchParams.get('min')) && !/plan|stoptimes/.test(U.transitous), U.transitous);
+  t('URL de liaison : aucune donnée de l’utilisateur (adresses fixes)', JSON.stringify(L.urlsLiaison()) === JSON.stringify(U));
+
+  const NET = await import('../js/net.js');
+  const DIR = await import('../js/direct.js');
+  const fetchAvant = globalThis.fetch;
+  const vus = [];
+  let panne = false;
+  globalThis.fetch = async (url, init) => {
+    vus.push({ url: String(url), init });
+    await new Promise((r) => setTimeout(r, 10));
+    if (panne) throw new TypeError('Failed to fetch');
+    return new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const attendreReponses = (D, n) => new Promise((ok2) => {
+    const t1 = Date.now();
+    (function v() { if (D.etat().journal.filter((j) => j.libelle === 'Test de liaison').length >= n || Date.now() - t1 > 8000) ok2(); else setTimeout(v, 20); })();
+  });
+  try {
+    L._oublierTests();
+    const D = DIR.creerDirect();
+    const fin = NET.observer(D.evenement);
+    const evts = [];
+    const fin2 = NET.observer((e) => evts.push(e));
+    t('test de liaison : aucun test hors ligne', L.testerLiaison({ direct: D, enLigne: false }).length === 0 && L.testerLiaison({ direct: D, releveEnCours: true }).length === 0);
+    const lances = L.testerLiaison({ direct: D, enLigne: true });
+    await attendreReponses(D, 4);
+    const E = D.etat();
+    t('test de liaison : une requête réelle par service', lances.length === 4 && vus.length === 4 && Object.values(U).every((x) => vus.some((v) => v.url === x)), vus.map((v) => v.url));
+    t('test de liaison : hors relève, libellé « Test de liaison », reçu « réponse reçue »', evts.length === 8 && evts.every((e) => !e.etape && e.libelle === 'Test de liaison') && evts.filter((e) => e.duree != null).every((e) => e.recu && e.recu.texte === 'réponse reçue'), evts);
+    t('test de liaison : les quatre services joignables, aucune relève créée', DIR.SERVICES.every((s) => DIR.etatService(E.services[s]) === 'ok' && E.services[s].aRepondu && E.services[s].tReponse != null) && E.releve === null);
+    t('test de liaison : pas de second test dans les 10 min', L.testerLiaison({ direct: D, enLigne: true }).length === 0 && vus.length === 4);
+    D.debutReleve({ lieux: ['A'], destinations: 0 });
+    t('relève après le test : envois et reçu repartent, le service reste « joignable »', DIR.SERVICES.every((s) => E.services[s].envois === 0 && E.services[s].recu === null && E.services[s].aRepondu && E.services[s].dernierMs != null && DIR.etatService(E.services[s]) === 'ok'));
+    t('relève sans réponse préalable : service toujours « en attente »', DIR.etatService({ envois: 0, enVol: 0, dernierMs: null, recu: null, echec: '', aRepondu: false }) === 'attente');
+    /* Échec : affiché comme les autres, rien n'est levé. */
+    L._oublierTests();
+    panne = true;
+    const D2 = DIR.creerDirect();
+    const fin3 = NET.observer(D2.evenement);
+    let leve = false;
+    try { L.testerLiaison({ direct: D2, enLigne: true }); } catch (e) { leve = true; }
+    await attendreReponses(D2, 4);
+    fin3();
+    t('test de liaison : échec réseau = erreur affichée, rien de levé', !leve && DIR.SERVICES.every((s) => DIR.etatService(D2.etat().services[s]) === 'erreur' && D2.etat().services[s].echec === 'service injoignable'));
+    fin(); fin2();
+  } finally { globalThis.fetch = fetchAvant; L._oublierTests(); }
+  const srcL = readFileSync(join(APP, 'js', 'liaison.js'), 'utf8');
+  t('test de liaison : délai 8 s, par net.js, sans document ni stockage', /LIAISON_DELAI_MS = 8000/.test(srcL) && /delai: LIAISON_DELAI_MS/.test(srcL) && /from '\.\/net\.js'/.test(srcL) && !/document\.|localStorage|indexedDB|store\.js|fetch\(/.test(srcL));
 }
 
 groupe('Cohérence du code');

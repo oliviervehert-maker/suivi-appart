@@ -43,7 +43,7 @@ function deux(n) { return (n < 10 ? '0' : '') + n; }
 export function heure(ms) { const d = new Date(ms); return deux(d.getHours()) + ':' + deux(d.getMinutes()) + ':' + deux(d.getSeconds()); }
 function secondes(ms) { return Math.max(0, Math.round(ms / 1000)); }
 
-function serviceVierge() { return { envois: 0, enVol: 0, dernierMs: null, recu: null, echec: '', aRepondu: false }; }
+function serviceVierge() { return { envois: 0, enVol: 0, dernierMs: null, recu: null, echec: '', aRepondu: false, tReponse: null }; }
 
 /** Fabrique un état indépendant. o.maintenant : horloge (tests). */
 export function creerDirect(o = {}) {
@@ -100,7 +100,7 @@ export function creerDirect(o = {}) {
       if (v) svc.enVol = Math.max(0, svc.enVol - 1);
       svc.dernierMs = e.duree;
       if (e.echec) svc.echec = String(e.echec);
-      else { svc.echec = ''; svc.aRepondu = true; svc.recu = e.recu || null; }
+      else { svc.echec = ''; svc.aRepondu = true; svc.recu = e.recu || null; svc.tReponse = e.t; }
     }
     const R = relEnCours();
     if (R && v && v.releve === R.id && v.etape) {
@@ -126,10 +126,11 @@ export function creerDirect(o = {}) {
   function debutReleve(x = {}) {
     const lieux = (x.lieux || []).map((nom) => ({ nom: String(nom), statut: 'attente', page: 0, pages: null, lues: 0 }));
     numero++;
+    /* Seuls le nombre d'envois et le reçu repartent : un service qui a déjà répondu pendant la
+       session (test de liaison, suggestion...) reste « joignable », avec sa dernière durée mesurée. */
     for (const s of SERVICES) {
-      const enVol = E.services[s].enVol;
-      E.services[s] = serviceVierge();
-      E.services[s].enVol = enVol;
+      const p = E.services[s];
+      E.services[s] = Object.assign(serviceVierge(), { enVol: p.enVol, dernierMs: p.dernierMs, echec: p.echec, aRepondu: p.aRepondu, tReponse: p.tReponse });
     }
     E.releve = {
       id: numero, debut: maintenant(), fin: null, statut: 'cours', motif: '',
@@ -195,8 +196,9 @@ export function creerDirect(o = {}) {
 
 /* ---------- lectures pour l'affichage (pures) ---------- */
 export function etatService(s) {
-  if (!s || s.envois === 0) return s && s.enVol > 0 ? 'cours' : 'attente';
+  if (!s) return 'attente';
   if (s.enVol > 0) return 'cours';
+  if (s.envois === 0 && !s.aRepondu && !s.echec) return 'attente';
   return s.echec ? 'erreur' : 'ok';
 }
 export function volsEnCours(E) { return E.vols.size; }

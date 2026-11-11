@@ -55,11 +55,9 @@ p.meta{margin:0}
 .runline.err span{color:var(--bad)}
 .runline.busy i{background:var(--accent);animation:pulse 1.2s ease-in-out infinite}
 .runline span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-/* La zone de texte ouvre la « Relève en direct » : même apparence, chevron à droite du texte */
-.runline .runopen{flex:1;min-width:0;display:flex;align-items:center;gap:4px;height:var(--tap);margin:0;padding:0;border:0;background:none;color:inherit;font-size:12.5px;text-align:left;border-radius:6px}
-.runline .runopen span{flex:0 1 auto}
-.runline .runopen .chev{flex:none;width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.runline .btn{flex:none}
+/* Deux boutons de hauteur fixe à droite du texte d'état ; padding réduit pour tenir à 360 px de large */
+.runline .btn{flex:none;height:var(--tap);padding:0 10px;white-space:nowrap}
+.runline .runopen{color:var(--accent)}
 .runline .btn:disabled{opacity:.55;cursor:default}
 .enrline{height:18px;font-size:12px;color:var(--muted);display:flex;gap:8px;align-items:center;margin-top:-6px}
 .enrline .bar{flex:none;width:80px;height:4px;border-radius:9px;background:var(--line);overflow:hidden}

@@ -4,11 +4,16 @@ import { esc } from '../core/util.js';
 
 const BAN = 'https://api-adresse.data.gouv.fr/search/';
 
-export async function chercherAdresses(q, o = {}) {
+/* Adresse de la recherche (aussi utilisée par le test de liaison de l'écran « Relève en direct »). */
+export function urlAdresses(q, o = {}) {
   const p = new URLSearchParams({ q, limit: String(o.limit || 5) });
   if (o.autocomplete !== false) p.set('autocomplete', '1');
   if (o.type) p.set('type', o.type);
-  const r = await getJSONok(BAN + '?' + p.toString(), {
+  return BAN + '?' + p.toString();
+}
+
+export async function chercherAdresses(q, o = {}) {
+  const r = await getJSONok(urlAdresses(q, o), {
     delai: 8000,
     suivi: { libelle: o.autocomplete === false ? 'Position d’une adresse' : 'Recherche d’adresse', recu: (c) => (c ? { n: (c.features || []).length, unite: 'adresse' } : null) }
   });

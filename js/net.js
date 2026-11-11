@@ -44,7 +44,8 @@ function suivre(u, o) {
   return {
     fin(statut, corps, erreur) {
       const e = Object.assign({ t: Date.now(), duree: Math.max(0, Math.round(chrono() - t0)) }, base);
-      if (erreur) e.echec = String(erreur.message || 'échec').toLowerCase();
+      /* Échec de transport d'UN service : « hors ligne » seulement si l'appareil se dit hors ligne. */
+      if (erreur) e.echec = erreur.code === 'hors_ligne' ? (typeof navigator !== 'undefined' && navigator.onLine === false ? 'hors ligne' : 'service injoignable') : String(erreur.message || 'échec').toLowerCase();
       else {
         let recu = null;
         if (typeof s.recu === 'function') { try { recu = s.recu(corps, statut) || null; } catch (x) { recu = null; } }

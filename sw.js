@@ -3,11 +3,11 @@
    Mise à jour : changer VERSION (égale à APP_VERSION de js/config.js). La nouvelle coquille est
    téléchargée en entier, puis prend la main ; la page déjà ouverte garde ses fichiers, la nouvelle
    version sert au rechargement suivant. */
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 const CACHE = 'suivi-appart-' + VERSION;
 const COQUILLE = [
   './', 'index.html', 'app.css', 'manifest.webmanifest',
-  'js/app.js', 'js/config.js', 'js/etat.js', 'js/net.js', 'js/recherche.js', 'js/store.js', 'js/enrichissement.js', 'js/alertes.js', 'js/direct.js',
+  'js/app.js', 'js/config.js', 'js/etat.js', 'js/net.js', 'js/recherche.js', 'js/store.js', 'js/enrichissement.js', 'js/alertes.js', 'js/direct.js', 'js/liaison.js',
   'js/core/bienici.js', 'js/core/criteres.js', 'js/core/partage.js', 'js/core/fusion.js', 'js/core/score.js', 'js/core/transports.js', 'js/core/util.js', 'js/core/alertes.js',
   'js/ui/accueil.js', 'js/ui/adresse.js', 'js/ui/alertes-ui.js', 'js/ui/cartes.js', 'js/ui/criteres-ui.js', 'js/ui/divers.js', 'js/ui/donnees.js', 'js/ui/direct.js',
   'fonts/bricolage-grotesque-latin.woff2', 'fonts/bricolage-grotesque-latin-ext.woff2',

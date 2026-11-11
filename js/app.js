@@ -5,7 +5,7 @@ import { S, ui, charger, definirBiens, bien, modifierBien, remplacerBien, retire
 import { rechercher, verifierFiche } from './recherche.js';
 import { fusionner, appliquerVerif } from './core/fusion.js';
 import { criteresNeutres, resumeCriteres } from './core/criteres.js';
-import { ilYA, esc } from './core/util.js';
+import { ilYA, esc, doitRecharger } from './core/util.js';
 import { chargerCaches, planifier, progres } from './enrichissement.js';
 import { rendreListe, rendreEntete, majCarte, carteHTML, evalBien, afficherPlus, toutEvaluer, mettreEnTete } from './ui/cartes.js';
 import { rendreCriteres, majResumes, rendreLignes, rendreQuartiers, clic as clicCrit, change as changeCrit, touche as toucheCrit, crochets } from './ui/criteres-ui.js';
@@ -16,6 +16,7 @@ import { ouvrirAccueil, clicAccueil } from './ui/accueil.js';
 import { observer } from './net.js';
 import { direct } from './direct.js';
 import { initDirect, ouvrir as ouvrirDirect, fermer as fermerDirect, estOuvert as directOuvert } from './ui/direct.js';
+import { testerLiaison } from './liaison.js';
 
 const $ = (id) => document.getElementById(id);
 let ongletCourant = 'biens';
@@ -201,7 +202,7 @@ document.addEventListener('click', async (ev) => {
   if (d.v) { allerA(d.v); return; }
   if (d.goto) { allerA(d.goto); return; }
   if (t.id === 'refresh') { actualiser(); return; }
-  if (t.id === 'runopen') { ouvrirDirect(); return; }
+  if (t.id === 'runopen') { ouvrirDirect(); if (directOuvert()) lancerTestLiaison(); return; }
   if (t.id === 'direct-fermer') { fermerDirect(); return; }
   if (t.id === 'direct-actualiser') { if (!S.C.lieux.length) fermerDirect(); actualiser(); return; }
   if (d.f) { mettreEnTete(null); S.reglages.filtre = d.f; sauverReglages(); rendreListe({ reinitialiser: true }); return; }
@@ -269,7 +270,13 @@ document.addEventListener('keydown', (ev) => {
 window.addEventListener('online', majRun);
 window.addEventListener('offline', majRun);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
+  if (document.visibilityState !== 'visible') {
+    /* L'utilisateur quitte l'app : une nouvelle version en attente est prise maintenant. */
+    if (rechargementDu && conditionsRecharge(true)) location.reload();
+    return;
+  }
+  visibleDepuis = Date.now();
+  verifierMiseAJour();
   majRun();
   if (S.C.lieux.length && S.run.derniere && (Date.now() - Date.parse(S.run.derniere)) / 60000 > RECHERCHE_AUTO_MIN && navigator.onLine !== false) actualiser();
 });
@@ -324,18 +331,44 @@ async function partagerReglages() {
   } catch (e) { msg.textContent = 'Partage impossible sur cet appareil : passer par « Exporter ».'; }
 }
 
+/* ---------- test de liaison (écran « Relève en direct » ouvert) ---------- */
+function lancerTestLiaison() {
+  const R = direct.etat().releve;
+  testerLiaison({ direct, releveEnCours: !!S.run.enCours || !!(R && R.statut === 'cours') });
+}
+
 /* ---------- service worker (coquille hors ligne) ---------- */
+/* Une app installée reste en mémoire : au retour, aucune page n'est rechargée. La recherche de mise à
+   jour est donc relancée quand la page redevient visible (au plus une fois toutes les 10 minutes). */
+const VERIF_MAJ_MS = 10 * 60 * 1000;
+let enregistrement = null, derniereVerifMaj = 0, rechargementDu = false;
+let visibleDepuis = Date.now();
+function conditionsRecharge(masquee) {
+  return doitRecharger({
+    masquee,
+    depuisVisibleMs: Date.now() - visibleDepuis,
+    importEnCours: importVu,
+    saisieEnCours: !!document.querySelector('input:focus, textarea:focus, select:focus'),
+    releveEnCours: !!S.run.enCours
+  });
+}
+function verifierMiseAJour() {
+  if (!enregistrement || Date.now() - derniereVerifMaj < VERIF_MAJ_MS) return;
+  derniereVerifMaj = Date.now();
+  try { enregistrement.update().catch(() => {}); } catch (e) { /* recherche abandonnée */ }
+}
 function enregistrerSW() {
   if (!('serviceWorker' in navigator)) return;
   if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return;
-  const avait = !!navigator.serviceWorker.controller;
-  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => {});
-  const debut = Date.now();
+  let controlee = !!navigator.serviceWorker.controller;
+  derniereVerifMaj = Date.now();
+  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then((r) => { enregistrement = r; }).catch(() => {});
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (!avait) return;
-    /* Nouvelle version arrivée juste après l'ouverture, sans saisie ni import en cours : elle est prise tout de suite. */
-    if (Date.now() - debut < 20000 && !importVu && !document.querySelector('input:focus, textarea:focus, select:focus')) { location.reload(); return; }
-    $('version').textContent = APP_NOM + ' : nouvelle version installée, active au prochain lancement.';
+    /* Première prise en main (premier lancement) : pas une mise à jour. */
+    if (!controlee) { controlee = true; return; }
+    if (conditionsRecharge(document.visibilityState === 'hidden')) { location.reload(); return; }
+    rechargementDu = true;
+    $('version').textContent = APP_NOM + ' : nouvelle version installée, active dès la sortie de l’app.';
   });
 }
 

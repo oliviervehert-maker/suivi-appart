@@ -109,3 +109,14 @@ export function hachage(s) {
   for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); }
   return (h >>> 0).toString(36);
 }
+
+/* Mise à jour de l'appli : une nouvelle version (service worker) a pris la main. Recharger tout de
+   suite si la page est masquée, ou si elle a été chargée ou est redevenue visible depuis moins de
+   RECHARGE_FENETRE_MS ; jamais pendant un import, une saisie ou une relève. */
+export const RECHARGE_FENETRE_MS = 20000;
+export function doitRecharger(o = {}) {
+  if (o.importEnCours || o.saisieEnCours || o.releveEnCours) return false;
+  if (o.masquee) return true;
+  const d = Number(o.depuisVisibleMs);
+  return isFinite(d) && d >= 0 && d < RECHARGE_FENETRE_MS;
+}
